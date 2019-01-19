@@ -229,7 +229,7 @@ It seems after a group of 5 repetitions of this sync/frame/bit, is a 5 symbols o
 This seems to be the signal:
 
 ```
-  [signal file beging inside first group]
+	signal file begins inside first group
 	                                                 100011010000011 0 (0x---missing---?83 + 0b0)
 	0000100011010011111010010000000100010110001000000100011010000011 1 (0x08d3e90116204683 + 0b1)
 	0000100011010011111010010000000100010110001000000100011010000011 0 (0x08d3e90116204683 + 0b0)
