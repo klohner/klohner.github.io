@@ -219,6 +219,9 @@ There seems to be two separate dissimilar overlapping signals in this capture, e
 By applying a bandpass filter on each signal, decoding is possible.
 
 #### First signal
+
+![g009_433.96M_250k in URH](g009_433.96M_250k_1.jpg)
+
 ASK/OOK, symbol length is 246μs, PWM over 3 symbols.  Data frames are 192 symbols.  (192 / 3 / 8 = 8 bytes).  Frames are (presumably) repeated 5 times each in a grouping.
 Data bits are PWM encoded over three symbols, `100` for a 0 bit, `110` for a 1 bit.
 Frames have a sync/prefix of 24 symbols `111000111000111000111000`.
@@ -287,6 +290,8 @@ rtl_433 can find and decode a lot of this signal even though it's missing the be
 
 
 #### Second signal
+
+![g009_433.96M_250k in URH](g009_433.96M_250k_2.jpg)
 
 ASK/OOK, symbol length is 1954μs, PWM over 4 symbols.  Seems to have a sync/preamble symbol pattern, maybe 32 symbols `10001000100010001000100010001000`?
 Signal is truncated, so no idea how long it is.
