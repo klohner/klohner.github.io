@@ -1,5 +1,5 @@
 ﻿# Manually Decoding ASK PWM Signals from rtl_433 Signal I/Q Sample Files using Universal Radio Hacker
-[https://groups.google.com/d/msg/rtl_433/TpeXelyqgkM/OezRawSjAgAJ](/https://groups.google.com/d/msg/rtl_433/TpeXelyqgkM/OezRawSjAgAJ)
+[https://groups.google.com/d/msg/rtl_433/TpeXelyqgkM/OezRawSjAgAJ](https://groups.google.com/d/msg/rtl_433/TpeXelyqgkM/OezRawSjAgAJ)
 
 	From: "Garfield .15.99"
 	To: rtl_433 <rtl_433@googlegroups.com>
