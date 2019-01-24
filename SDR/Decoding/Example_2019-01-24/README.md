@@ -207,10 +207,10 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 
 ## g028_433.92M_250k.complex16u
 
-- 'rtl_433 -R 0 -r g028_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100` gives us "0x148" data frames.
+- `rtl_433 -R 0 -r g028_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100` gives us "0x148" data frames.
 
 ## g029_433.92M_250k.complex16u
 
-- 'rtl_433 -R 0 -r g028_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100` gives us "0x74d" data frames.
+- `rtl_433 -R 0 -r g028_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100` gives us "0x74d" data frames.
 
 
