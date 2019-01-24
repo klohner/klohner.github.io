@@ -116,33 +116,33 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 ```
 
 - I'm going to guess the modulation of this signal is "OOK_PPM" (Pulse Position Modulation) 
-  because data bits seems to be encoded as the length of signal gaps (the "0" signals) between 
+  because data bits seem to be encoded as the length of signal gaps (the "0" signals) between 
   signal pulses (the "1" signals).
 
-- For our analysis, those pulses are 252 samples long.  The file we're analysing was sampled
+- From our analysis, those pulses are 252 samples long.  The file we're analysing was sampled
   at "250k" samples per second, according to the filename, so the duration of each symbol of
   a pulse or gap is about 1008 microseconds (μs) in duration.
 
 - OOK_PPM needs to know the "Nominal width of '0' gap [us]" and based on the signal we looked
   at before, I know that a 0 data bit is a "0" signal (a gap) only one symbol in duration (1008μs)
-  before a pulse (a "1" symbol).  So, so far:
+  before a pulse (a "1" symbol).  So, we have so far:
 
-  'n=SAMPLE1,m=OOK_PPM,s=1008'
+  `n=SAMPLE1,m=OOK_PPM,s=1008`
 
 - OOK_PPM needs to know the "Nominal width of '1' gap [us]" and based on the signal we looked
   at before, I know that a 1 data bit is a "0" signal (a gap) three symbols in duration (3024μs)
   before a pulse (a "1" symbol). 
 
-  'n=SAMPLE1,m=OOK_PPM,s=1008,l=3024'
+  `n=SAMPLE1,m=OOK_PPM,s=1008,l=3024`
 
 - OOK_PPM also needs to know the reset duration.  We know that any gap longer than 3 symbols
   is outside the frame data, so let's round that up a bit and say 3200μs.
 
-  'n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200'
+  `n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200`
 
 - Let's give that a try on our signal:  
 
-  'rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200'
+  `rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200`
 
 ![g001_433.92M_250k_rtl_433_1.jpg in URH](g001_433.92M_250k_rtl_433_1.jpg)
 
@@ -152,7 +152,7 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
   some default value of tolerance to those durations and deciding that "001" looks like a 
   "0" bit.  Let's specify a tolerance of 100μs and see what happens.
 
-  'rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100'
+  `rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100`
 
 ![g001_433.92M_250k_rtl_433_2.jpg in URH](g001_433.92M_250k_rtl_433_2.jpg)
 
