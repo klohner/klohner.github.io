@@ -147,10 +147,10 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 ![g001_433.92M_250k_rtl_433_1.jpg in URH](g001_433.92M_250k_rtl_433_1.jpg)
 
 - Hey, that's looking pretty good.  rtl_433 is trying to decode the prefix, though, instead
-  of chopping it off, and my guess is that it's looking at that initial "11111001" symbol
-  string and decoding that "001" as a "0" bit.  I'll guess that it's because it's applying
-  some default value of tolerance to those durations and deciding that "001" looks like a 
-  "0" bit.  Let's specify a tolerance of 100μs and see what happens.
+  of chopping it off.  And my guess is that it's looking at that initial "11111001" symbol
+  string and decoding the "001" as a "0" bit.  I'll guess that it's because it's applying
+  some generous default value of tolerance to those durations and deciding that "001" looks 
+  like a "0" bit.  Let's specify a tight tolerance of 100μs and see what happens.
 
   `rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100`
 
