@@ -147,7 +147,7 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 
 ![g001_433.92M_250k_rtl_433_1.jpg in URH](g001_433.92M_250k_rtl_433_1.jpg)
 
-- Looks pretty good.  However rtl_433 is trying to decode the prefix instead of chopping it off.  
+- Looks pretty good.  However rtl_433 is trying to decode the prefix instead of ignoring it.  
   And it seems like it's looking at the initial "11111001" symbol string and decoding the "001" 
   as a "0" bit.  My assumption is that it's applying an overly generous default value of tolerance 
   to the long and short gap durations we specified, and deciding that the "001" looks like a "0" bit.
