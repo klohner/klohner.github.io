@@ -150,7 +150,7 @@ E.g. -X "n=doorbell,m=OOK_PWM,s=400,l=800,r=7000,g=1000,match={24}0xa9878c,repea
 - Looks pretty good.  However rtl_433 is trying to decode the prefix instead of ignoring it.  
   And it seems like it's looking at the initial "11111001" symbol string and decoding the "001" 
   as a "0" bit.  My assumption is that it's applying an overly generous default value of tolerance 
-  to the long and short gap durations we specified, and deciding that the "001" looks like a "0" bit.
+  to the long and short gap durations we've specified, and deciding that the "001" looks like a "0" bit.
   Let's specify a tighter tolerance of 100μs and see what happens.
 
   `rtl_433 -R 0 -r g001_433.92M_250k.complex16u -X n=SAMPLE1,m=OOK_PPM,s=1008,l=3024,r=3200,t=100`
