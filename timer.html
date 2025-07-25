@@ -1,9 +1,21 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<html lang="en" class=" wfjyqjai idc0_350"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Countdown Timer</title>
+    <style>
+      /* Make Noto Mono font available */
+      @font-face {
+        font-family: "Noto Mono";
+        src: url('notomono-regular-webfont.woff');
+        src: url('notomono-regular-webfont.woff') format('woff'),
+             url('notomono-regular-webfont.woff2') format('woff2');
+        font-weight: normal;
+        font-style: normal;
+      }
+    </style>
+
     <style>
       /* Basic reset and global styles */
       html, body {
@@ -12,7 +24,7 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        font-family: 'Courier New', Courier, monospace; /* Matching font-mono */
+	font-family: 'Noto Mono','Courier New', Courier, monospace; /* Matching font-mono */
       }
       
       .timer-display-container {
@@ -60,8 +72,8 @@
     </style>
   </head>
   <body>
-    <div id="timer-container" class="timer-display-container">
-      <div id="timer-text" class="timer-text"></div>
+    <div id="timer-container" class="timer-display-container bg-red">
+      <div id="timer-text" class="timer-text text-black">01:35:00</div>
     </div>
     <script>
       document.addEventListener('DOMContentLoaded', () => {
@@ -241,5 +253,6 @@
         resetTimer(); // Set initial state and UI on load
       });
     </script>
-  </body>
-</html>
+  
+
+</body></html>
