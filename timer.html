@@ -78,7 +78,11 @@
     <script>
       document.addEventListener('DOMContentLoaded', () => {
         // --- CONSTANTS ---
-        const INITIAL_TIME_IN_SECONDS = 95 * 60;
+        const INITIAL_TIMES_IN_SECONDS = [
+          95 * 60,  // 1h 35m
+          100 * 60, // 1h 40m
+          65 * 60,  // 1h 5m
+        ];
         const TimerStatus = {
           RESET: 0,
           RUNNING: 1,
@@ -91,7 +95,8 @@
         const timerText = document.getElementById('timer-text');
 
         // --- STATE ---
-        let timeLeft = INITIAL_TIME_IN_SECONDS;
+        let presetIndex = 0;
+        let timeLeft = INITIAL_TIMES_IN_SECONDS[presetIndex];
         let status = TimerStatus.RESET;
         let timerInterval = null;
         let flashInterval = null;
@@ -150,6 +155,7 @@
           
           stopFlashing();
           status = TimerStatus.RUNNING;
+          presetIndex = 0; // Reset preset index
           
           timerInterval = setInterval(() => {
             timeLeft--;
@@ -195,8 +201,9 @@
           timerInterval = null;
           stopFlashing();
           
-          timeLeft = INITIAL_TIME_IN_SECONDS;
+          timeLeft = INITIAL_TIMES_IN_SECONDS[presetIndex];
           status = TimerStatus.RESET;
+          presetIndex = (presetIndex + 1) % INITIAL_TIMES_IN_SECONDS.length;
           updateUI();
         };
 
