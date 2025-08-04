@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Countdown Timer</title>
+    <style>
+      /* Make Noto Mono font available */
+      @font-face {
+        font-family: "Noto Mono";
+        src: url('notomono-regular-webfont.woff');
+        src: url('notomono-regular-webfont.woff') format('woff'),
+             url('notomono-regular-webfont.woff2') format('woff2');
+        font-weight: normal;
+        font-style: normal;
+      }
+    </style>
+
+    <style>
+      /* Basic reset and global styles */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+	font-family: 'Noto Mono','Courier New', Courier, monospace; /* Matching font-mono */
+      }
+      
+      .timer-display-container {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background-color 0.3s ease-in-out;
+      }
+
+      .timer-text {
+        font-weight: 900; /* font-black */
+        /*
+          Dynamically adjust font size to fit both viewport width and height.
+          - min(40vh, 18vw) selects the smaller of the two values.
+          - 40vh scales with height.
+          - 18vw scales with width, preventing the 8-character string from overflowing horizontally.
+        */
+        font-size: min(40vh, 18vw);
+        line-height: 1; /* leading-none */
+        user-select: none; /* select-none */
+        transition: color 0.15s ease-in-out;
+        white-space: nowrap; /* Prevent text from wrapping */
+      }
+
+      /* Background colors */
+      .bg-green {
+        background-color: #4ade80;
+      }
+      .bg-yellow {
+        background-color: #facc15;
+      }
+      .bg-red {
+        background-color: #dc2626;
+      }
+
+      /* Text colors */
+      .text-black {
+        color: black;
+      }
+      .text-white {
+        color: white;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="timer-container" class="timer-display-container bg-red">
+      <div id="timer-text" class="timer-text text-black">00:00:00</div>
+    </div>
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+        // --- CONSTANTS ---
+        const INITIAL_TIMES_IN_SECONDS = [
+          95 * 60,  // 1h 35m
+          100 * 60, // 1h 40m
+          65 * 60,  // 1h 5m
+        ];
+        const TimerStatus = {
+          RESET: 0,
+          RUNNING: 1,
+          PAUSED: 2,
+          FINISHED: 3,
+        };
+
+        // --- DOM ELEMENTS ---
+        const timerContainer = document.getElementById('timer-container');
+        const timerText = document.getElementById('timer-text');
+
+        // --- STATE ---
+        let initialTimeIndex = 0;
+        let timeLeft = INITIAL_TIMES_IN_SECONDS[initialTimeIndex];
+        let status = TimerStatus.RESET;
+        let timerInterval = null;
+        let flashInterval = null;
+
+        // --- HELPERS ---
+        const formatTime = (totalSeconds) => {
+          if (totalSeconds < 0) totalSeconds = 0;
+
+          const hours = Math.floor(totalSeconds / 3600);
+          const minutes = Math.floor((totalSeconds % 3600) / 60);
+          const seconds = totalSeconds % 60;
+
+          const pad = (num) => num.toString().padStart(2, '0');
+
+          return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+        };
+        
+        const updateUI = () => {
+          // Reset classes to ensure a clean slate for applying new styles
+          timerContainer.className = 'timer-display-container'; 
+          timerText.className = 'timer-text';
+
+          // Update background color based on status
+          switch (status) {
+            case TimerStatus.RUNNING:
+              timerContainer.classList.add('bg-green');
+              break;
+            case TimerStatus.PAUSED:
+              timerContainer.classList.add('bg-yellow');
+              break;
+            case TimerStatus.RESET:
+            case TimerStatus.FINISHED:
+            default:
+              timerContainer.classList.add('bg-red');
+              break;
+          }
+          
+          // Update time text and color
+          timerText.textContent = formatTime(timeLeft);
+          timerText.classList.add('text-black');
+        };
+
+        const stopFlashing = () => {
+          if (flashInterval) {
+            clearInterval(flashInterval);
+            flashInterval = null;
+            // Ensure text color is reset to default
+            timerText.classList.remove('text-white');
+            timerText.classList.add('text-black');
+          }
+        };
+        
+        // --- CONTROL FUNCTIONS ---
+        const startTimer = () => {
+          if (status === TimerStatus.RUNNING || timeLeft <= 0) return;
+          
+          stopFlashing();
+          status = TimerStatus.RUNNING;
+          initialTimeIndex = 0; // Reset preset index
+          
+          timerInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft <= 0) {
+              finishTimer();
+            } else {
+              updateUI();
+            }
+          }, 1000);
+          updateUI();
+        };
+        
+        const pauseTimer = () => {
+          if (timerInterval) clearInterval(timerInterval);
+          timerInterval = null;
+          status = TimerStatus.PAUSED;
+          updateUI();
+        };
+
+        const finishTimer = () => {
+          if (timerInterval) clearInterval(timerInterval);
+          timerInterval = null;
+          timeLeft = 0;
+          status = TimerStatus.FINISHED;
+          updateUI();
+
+          let flashCount = 0;
+          const totalFlashes = 20; // 20 toggles over 10 seconds (500ms interval)
+
+          flashInterval = setInterval(() => {
+            flashCount++;
+            if (flashCount >= totalFlashes) {
+              stopFlashing();
+            } else {
+              timerText.classList.toggle('text-white');
+              timerText.classList.toggle('text-black');
+            }
+          }, 500);
+        };
+
+        const resetTimer = () => {
+          if (timerInterval) clearInterval(timerInterval);
+          timerInterval = null;
+          stopFlashing();
+          
+          timeLeft = INITIAL_TIMES_IN_SECONDS[initialTimeIndex];
+          status = TimerStatus.RESET;
+          initialTimeIndex = (initialTimeIndex + 1) % INITIAL_TIMES_IN_SECONDS.length;
+          updateUI();
+        };
+
+        const handleKeyDown = (event) => {
+          const key = event.key;
+          const upperKey = key.toUpperCase();
+
+          // '+' key
+          if (key === '+' || key === '=' || key === 'ArrowUp') {
+            stopFlashing();
+            if (status === TimerStatus.FINISHED) {
+              timeLeft = 60;
+              status = TimerStatus.PAUSED;
+            } else {
+              timeLeft += 60;
+            }
+            updateUI();
+            return;
+          }
+
+          // '-' key
+          if (key === '-' || key === 'ArrowDown') {
+            if (status === TimerStatus.FINISHED) return;
+            stopFlashing();
+            if (timeLeft <= 60) {
+              finishTimer();
+            } else {
+              timeLeft -= 60;
+              updateUI();
+            }
+            return;
+          }
+
+          // 'R' key
+          if (upperKey === 'R') {
+            resetTimer();
+            return;
+          }
+
+          // 'P' key
+          if (upperKey === 'P' || key === ' ') {
+            if (status === TimerStatus.FINISHED) return;
+
+            if (status === TimerStatus.RUNNING) {
+              pauseTimer();
+            } else {
+              startTimer();
+            }
+          }
+        };
+
+        // --- INITIALIZATION ---
+        window.addEventListener('keydown', handleKeyDown);
+        resetTimer(); // Set initial state and UI on load
+      });
+    </script>
+  
+
+</body></html>
