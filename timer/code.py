@@ -37,6 +37,9 @@ while True:
                 keyboard.send(Keycode.KEYPAD_PLUS)
             elif not(btnD.value):
                 keyboard.send(Keycode.KEYPAD_MINUS)
+            led.value = True  # Provide visual feedback
     else:
         already_pressing_BTN = False
+        led.value = False # Turn off LED on release
         time.sleep(0.1)
+    time.sleep(0.01)
