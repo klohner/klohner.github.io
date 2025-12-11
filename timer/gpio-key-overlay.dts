@@ -1,0 +1,92 @@
+/dts-v1/;
+/plugin/;
+
+/*
+ * Device Tree Overlay for 4 GPIO buttons compatible with RPi 2/3/4/5
+ *
+ * NOTE ON FIX: This configuration uses the canonical 'linux,disable-autorepeat;'
+ * property for R and P, and requires a separate OS-level configuration (xset/xinput)
+ * to prevent software auto-repeat in the desktop environment.
+ *
+ * Uses internal pull-up resistors (GPIO_PULL_UP | GPIO_ACTIVE_LOW = 3).
+ * Buttons connect the GPIO pin to Ground when pressed (active-low).
+ */
+
+/ {
+    // UPDATED COMPATIBLE LIST: Targets RPi 5, 4, 3, and 2.
+    compatible = "brcm,bcm2712", "brcm,bcm2711", "brcm,bcm2710", "brcm,bcm2709";
+
+    /* Fragment 0: Define the gpio-keys node */
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+            keypad: gpio_keys {
+                compatible = "gpio-keys";
+                status = "okay";
+
+                pinctrl-names = "default";
+                pinctrl-0 = <&key_pins>;
+
+                gpios = <&gpio 22 3
+                         &gpio 23 3
+                         &gpio 24 3
+                         &gpio 27 3>;
+
+
+                /* Define the individual keys */
+
+                button-r {
+                    label = "Key-R";
+                    linux,code = <19>; // KEY_R
+                    gpios = <&gpio 22 3>; // GPIO 22, Active Low + Pull Up (3)
+                    linux,input-type = <1>; // EV_KEY
+                    debounce-interval = <50>; // 50ms debounce
+                    wakeup-source;
+                    linux,disable-autorepeat; // <-- Canonical setting for the driver
+                };
+
+                button-p {
+                    label = "Key-P";
+                    linux,code = <25>; // KEY_P
+                    gpios = <&gpio 23 3>; // GPIO 23, Active Low + Pull Up
+                    linux,input-type = <1>;
+                    debounce-interval = <50>;
+                    wakeup-source;
+                    linux,disable-autorepeat; // <-- Canonical setting for the driver
+                };
+
+                button-minus {
+                    label = "Keypad-Minus";
+                    linux,code = <74>; // KEY_KPMINUS
+                    gpios = <&gpio 24 3>; // GPIO 24, Active Low + Pull Up
+                    linux,input-type = <1>;
+                    debounce-interval = <50>;
+                    wakeup-source;
+                    // Auto-repeat ENABLED
+                };
+
+                button-plus {
+                    label = "Keypad-Plus";
+                    linux,code = <78>; // KEY_KPPLUS
+                    gpios = <&gpio 27 3>; // GPIO 27, Active Low + Pull Up
+                    linux,input-type = <1>;
+                    debounce-interval = <50>;
+                    wakeup-source;
+                    // Auto-repeat ENABLED
+                };
+            };
+        };
+    };
+
+    /* Fragment 1: Explicitly configure pins for Input and Pull Up */
+    fragment@1 {
+        target = <&gpio>;
+        __overlay__ {
+            key_pins: key_pins_state {
+                brcm,pins = <22 23 24 27>;
+                brcm,function = <0>; // Input (0)
+                brcm,pull = <2>;     // Pull Up (2) - This forces the internal pull-up.
+            };
+        };
+    };
+};
