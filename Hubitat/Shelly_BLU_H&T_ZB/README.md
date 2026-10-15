@@ -26,4 +26,6 @@ Drivers Code → New Driver → Import, URL (Simple or Reference):
 - The sensor enforces no reporting limits, so the driver clamps intervals itself; max interval 0xFFFF switches reporting off.
 - A fresh join resets reporting to factory (T/H 60/900 s, battery 300/1200 s); a battery pull keeps the configuration.
 
+See [Technical_Reference.md](Technical_Reference.md) for the protocol, sleepy-device delivery rules, known limitations and changelog.
+
 Apache-2.0. Use at your own risk; the driver sends Zigbee commands to your sensor.
