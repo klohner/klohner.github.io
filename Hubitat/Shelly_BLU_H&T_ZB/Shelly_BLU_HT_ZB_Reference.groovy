@@ -1,7 +1,8 @@
 /**
  *  Shelly BLU H&T ZB (SBHT-203C) - Reference driver
  *
- *  STATUS: v0.4.0-features (Plan step 4.4): adds resetReportingToFactory, health check (offline after 3x the temperature max interval),
+ *  STATUS: v0.5.0-everymenu: the 'report at least every' settings are drop-down menus (1 minute ... 18 hours, or off) for temperature,
+ *  humidity and battery. v0.4.0-features (Plan step 4.4): adds resetReportingToFactory, health check (offline after 3x the temperature max interval),
  *  batteryReplaced date. Earlier: v0.3.0-queue (Plan step 4.3). Metadata, preferences, logging, state schema, Device Data standard (4.1), the
  *  complete frame PARSER (4.2) and the SLEEPY-DEVICE QUEUE ENGINE (4.3): configure()/updated()/refresh() queue items, a
  *  frame from the sensor opens a command window, items are sent one at a time, replies are matched by content, every
@@ -35,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.4.0-features'
+@Field static final String DRIVER_VERSION = '0.5.0-everymenu'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -51,6 +52,9 @@ import java.math.RoundingMode
 @Field static final BigDecimal CLAMP_TEMP_DELTA_MAX = 5.0
 @Field static final BigDecimal CLAMP_HUM_DELTA_MIN  = 0.5    // % RH
 @Field static final BigDecimal CLAMP_HUM_DELTA_MAX  = 20.0
+@Field static final int CLAMP_MAX_MAX_S = 64800   // longest 'report at least every' offered (18 hours; ZCL allows up to 0xFFFE)
+@Field static final Map REPORT_EVERY = Collections.unmodifiableMap(['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes',
+    '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'])
 @Field static final int REPORTING_OFF_MAX_S = 0xFFFF  // ZCL: max interval 0xFFFF = stop reporting (entry removed on this sensor)
 
 // Queue engine timing (all measured on the sensor: every frame it sends opens a window >= 6.5 s, ~1 s per command, one at a time).
@@ -71,9 +75,9 @@ import java.math.RoundingMode
 @Field static final Map CMD_ID = Collections.unmodifiableMap(['cr': '06', 'read': '00', 'rcr': '08'])   // ZCL command ids (for Default Response matching)
 
 // Defaults = a deliberate, battery-friendly setting (not the factory one).
-@Field static final Map DEFAULTS = Collections.unmodifiableMap([tempMin: 60, tempMax: 900, tempDelta: 0.10,
-                                    humMode: 'throttled', humMin: 60, humMax: 3600, humDelta: 2.0,
-                                    battMin: 300, battMax: 1200, tempOffset: 0, humOffset: 0,
+@Field static final Map DEFAULTS = Collections.unmodifiableMap([tempMin: 60, tempEvery: '3600', tempDelta: 0.10,
+                                    humMin: 60, humEvery: '3600', humDelta: 2.0,
+                                    battMin: 300, battEvery: '3600', tempOffset: 0, humOffset: 0,
                                     logEnable: false, traceEnable: false])
 
 // ZCL status codes (Configure Reporting / Read Reporting / Default Response / Read Attributes)
@@ -123,13 +127,12 @@ metadata {
 
     preferences {
         input name: 'tempMin',   type: 'number',  title: 'Temperature: shortest time between reports (seconds, 30-3600)',  range: '30..3600', defaultValue: 60
-        input name: 'tempMax',   type: 'number',  title: 'Temperature: report at least every (seconds, 60-3600)',          range: '60..3600', defaultValue: 900
-        input name: 'tempDelta', type: 'decimal', title: 'Temperature: report when it changes by (°C, 0.05-5)',            defaultValue: 0.10
-        input name: 'humMode',   type: 'enum',    title: 'Humidity reporting', options: ['normal': 'Normal', 'throttled': 'Throttled (saves battery)', 'off': 'Off (value only on Refresh)'],
-                                                  defaultValue: 'throttled'
+        input name: 'tempDelta', type: 'decimal', title: 'Temperature: report when it changes by (\u00b0C, 0.05-5)',            defaultValue: 0.10
+        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: REPORT_EVERY, defaultValue: '3600'
         input name: 'humMin',    type: 'number',  title: 'Humidity: shortest time between reports (seconds, 30-3600)',     range: '30..3600', defaultValue: 60
-        input name: 'humMax',    type: 'number',  title: 'Humidity: report at least every (seconds, 60-3600)',             range: '60..3600', defaultValue: 3600
         input name: 'humDelta',  type: 'decimal', title: 'Humidity: report when it changes by (% RH, 0.5-20)',             defaultValue: 2.0
+        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: REPORT_EVERY, defaultValue: '3600'
+        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: REPORT_EVERY, defaultValue: '3600'
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'logEnable', type: 'bool',    title: 'Debug logging (turns itself off after 30 minutes)', defaultValue: false
@@ -151,6 +154,9 @@ void updated() {
     logInfo "preferences saved (v${DRIVER_VERSION})"
     unschedule('debugOff')
     if (pref('logEnable') || pref('traceEnable')) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
+    for (String old in ['tempMax', 'humMax', 'humMode', 'battMax']) {      // settings of versions before 0.5.0
+        try { device.removeSetting(old) } catch (Exception e) { /* not present */ }
+    }
     initState()
     writeDeviceData()
     scheduleHealth()
@@ -215,6 +221,7 @@ void healthCheck() {
     // what the SENSOR holds (last acknowledged), not what the preferences say; a pending change must not shorten the limit
     String cfg = ((state.applied ?: [:]) as Map)['0402']?.cfg
     int tMax = cfg ? Integer.parseInt(cfg.split('/')[1]) : Math.max(900, (buildDesired()['0402'] as Map).max as int)
+    if (tMax >= REPORTING_OFF_MAX_S) return            // temperature reporting is off: silence is expected
     long limit = Math.max(600000L, 3L * tMax * 1000L)
     if (now() - last > limit && state.health != 'offline') {
         state.health = 'offline'
@@ -840,26 +847,34 @@ private int deltaRaw(Object v, BigDecimal lo, BigDecimal hi) {
     return d.multiply(100G).setScale(0, RoundingMode.HALF_UP).intValue()      // 0.01 degC / 0.01 % per unit
 }
 
+private int everySeconds(Object v, int dflt) {
+    String t = (v == null) ? '' : v.toString()
+    if (t == 'off') return REPORTING_OFF_MAX_S
+    int x
+    try { x = new BigDecimal(t).intValue() } catch (Exception e) { x = dflt }
+    return Math.max(CLAMP_TH_MAXMIN_S, Math.min(CLAMP_MAX_MAX_S, x))
+}
+
 private Map buildDesired(Map ov = null) {
     Map o = (ov != null) ? ov : ((testing() && state.testPrefs != null) ? (state.testPrefs as Map) : null)
     int tMin = clampInt(gp(o, 'tempMin'), CLAMP_TH_MIN_S, CLAMP_TH_MAX_S, 60)
-    int tMax = Math.max(tMin, clampInt(gp(o, 'tempMax'), CLAMP_TH_MAXMIN_S, CLAMP_TH_MAX_S, 900))
+    int tEvery = everySeconds(gp(o, 'tempEvery'), 3600)
+    boolean tOff = (tEvery == REPORTING_OFF_MAX_S)
+    int tMax = tOff ? tEvery : Math.max(tMin, tEvery)          // never below min (the sensor answers 0x87)
     int tDelta = deltaRaw(gp(o, 'tempDelta'), CLAMP_TEMP_DELTA_MIN, CLAMP_TEMP_DELTA_MAX)
-    String mode = (gp(o, 'humMode') ?: 'throttled').toString()
     int hMin = clampInt(gp(o, 'humMin'), CLAMP_TH_MIN_S, CLAMP_TH_MAX_S, 60)
-    int hMax = Math.max(hMin, clampInt(gp(o, 'humMax'), CLAMP_TH_MAXMIN_S, CLAMP_TH_MAX_S, 3600))
+    int hEvery = everySeconds(gp(o, 'humEvery'), 3600)
+    boolean hOff = (hEvery == REPORTING_OFF_MAX_S)
+    int hMax = hOff ? hEvery : Math.max(hMin, hEvery)
     int hDelta = deltaRaw(gp(o, 'humDelta'), CLAMP_HUM_DELTA_MIN, CLAMP_HUM_DELTA_MAX)
-    boolean hOff = (mode == 'off')
-    if (mode == 'normal') {                      // "normal" = never slower than the factory-like 15 min and never coarser than 1 %
-        hMax = Math.max(hMin, Math.min(hMax, 900))        // never below min (the sensor answers 0x87)
-        hDelta = Math.min(hDelta, 100)
-    }
-    if (hOff) hMax = REPORTING_OFF_MAX_S         // max 0xFFFF removes the reporting entry on this sensor (= off)
     int bMin = clampInt(gp(o, 'battMin'), CLAMP_BATT_MIN_S, CLAMP_BATT_MAX_S, 300)
-    int bMax = Math.max(bMin, clampInt(gp(o, 'battMax'), CLAMP_BATT_MIN_S, CLAMP_BATT_MAX_S, 1200))
-    return ['0402': [min: tMin, max: tMax, delta: tDelta, off: false],
+    int bEvery = everySeconds(gp(o, 'battEvery'), 3600)
+    boolean bOff = (bEvery == REPORTING_OFF_MAX_S)
+    int bMax = bOff ? bEvery : Math.max(bMin, bEvery)
+    // max interval 0xFFFF removes the reporting entry on this sensor (= off, value only on Refresh)
+    return ['0402': [min: tMin, max: tMax, delta: tDelta, off: tOff],
             '0405': [min: hMin, max: hMax, delta: hDelta, off: hOff],
-            '0001': [min: bMin, max: bMax, delta: 1, off: false]]
+            '0001': [min: bMin, max: bMax, delta: 1, off: bOff]]
 }
 
 private String cfgOf(Map c) { "${c.min}/${c.max}/${c.delta}".toString() }
@@ -1408,7 +1423,7 @@ private Map runEngineTests() {
         // E4 CR reply records the applied config, queues the read-back, releases the next bind
         feed(frame('0402', '07', '00'))
         Map ap = (((state.applied ?: [:]) as Map)['0402'] ?: [:]) as Map
-        check('E4 applied recorded unverified', ap.cfg == '60/900/10' && ap.verified == false, ap.toString())
+        check('E4 applied recorded unverified', ap.cfg == '60/3600/10' && ap.verified == false, ap.toString())
         check('E4 read-back queued', queue().any { Map i -> i.kind == 'rcr' && i.cluster == '0402' }, queue().toString())
         check('E4 next is humidity bind', txs().size() == 3 && txs()[2].toString().startsWith('bind|0405|'), txs().toString())
 
@@ -1417,9 +1432,9 @@ private Map runEngineTests() {
         queueVerify()
         feed(REPORT_T)
         check('E5 verify starts with rcr 0402', txs().size() == 1 && txs()[0].toString().startsWith('rcr|0402|'), txs().toString())
-        feed(frame('0402', '09', '00000000293C0084030A00'))
+        feed(frame('0402', '09', '00000000293C00100E0A00'))
         ap = (((state.applied ?: [:]) as Map)['0402'] ?: [:]) as Map
-        check('E5 verified', ap.verified == true && ap.cfg == '60/900/10', ap.toString())
+        check('E5 verified', ap.verified == true && ap.cfg == '60/3600/10', ap.toString())
         check('E5 next rcr 0405', txs().size() == 2 && txs()[1].toString().startsWith('rcr|0405|'), txs().toString())
 
         // E6 read-back mismatch re-queues the CR (bounded)
@@ -1432,25 +1447,28 @@ private Map runEngineTests() {
         check('E6 not applied', ((state.applied ?: [:]) as Map)['0402'] == null, state.applied?.toString())
 
         // E7 humidity off: max 0xFFFF; NOT_FOUND on read-back means verified
-        reset([humMode: 'off'])
+        reset([humEvery: 'off'])
         Map d = buildDesired()
         check('E7 off desired', (d['0405'] as Map).max == 65535 && (d['0405'] as Map).off == true, d['0405'].toString())
         queueVerify()
         feed(REPORT_T)
-        feed(frame('0402', '09', '00000000293C0084030A00'))
+        feed(frame('0402', '09', '00000000293C00100E0A00'))
         feed(frame('0405', '09', '8B000000'))
         ap = (((state.applied ?: [:]) as Map)['0405'] ?: [:]) as Map
         check('E7 off verified by NOT_FOUND', ap.verified == true, ap.toString())
 
         // E8 clamps
-        reset([tempMin: 1, tempMax: 99999, tempDelta: 0.001, humMin: 5, humMax: 10, humDelta: 99, battMin: 5, battMax: 10])
+        reset([tempMin: 1, tempEvery: '99999', tempDelta: 0.001, humMin: 5, humEvery: '60', humDelta: 99, battMin: 5, battEvery: '60'])
         d = buildDesired()
-        check('E8 temperature clamp', cfgOf(d['0402'] as Map) == '30/3600/5', cfgOf(d['0402'] as Map))
+        check('E8 temperature clamp', cfgOf(d['0402'] as Map) == '30/64800/5', cfgOf(d['0402'] as Map))
         check('E8 humidity clamp', cfgOf(d['0405'] as Map) == '30/60/2000', cfgOf(d['0405'] as Map))
         check('E8 battery clamp', cfgOf(d['0001'] as Map) == '300/300/1', cfgOf(d['0001'] as Map))
-        reset([humMode: 'normal', humMin: 1200, humMax: 3600])
+        reset([humMin: 1200, humEvery: '300'])
         d = buildDesired()
-        check('E8b normal mode keeps max >= min', cfgOf(d['0405'] as Map) == '1200/1200/100', cfgOf(d['0405'] as Map))
+        check('E8b max never below min', cfgOf(d['0405'] as Map) == '1200/1200/200', cfgOf(d['0405'] as Map))
+        reset([tempEvery: 'off', battEvery: '64800'])
+        d = buildDesired()
+        check('E8c off for temperature, 18 h for battery', (d['0402'] as Map).off == true && (d['0402'] as Map).max == 65535 && cfgOf(d['0001'] as Map) == '300/64800/1', "${d['0402']} ${d['0001']}")
 
         // E9 no answer: bounded retries, then FAILED with a reason
         reset(null)
