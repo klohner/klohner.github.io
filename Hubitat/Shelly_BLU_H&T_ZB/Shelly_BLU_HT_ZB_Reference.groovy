@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.6.1-initialize'
+@Field static final String DRIVER_VERSION = '0.6.2-initialize'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -96,7 +96,7 @@ import java.math.RoundingMode
                                                                       '0004': 'manufacturer', '0005': 'model', '0006': 'dateCode'])
 
 // Explanation of the Commands, shown on the Preferences page.
-@Field static final String HELP_HTML = '<b>What the Commands do</b><br>' +
+@Field static final String HELP_HTML = '<b>What the Commands do</b><br><span style="font-weight:normal">' +
   '<b>Configure</b>: binds the sensor to the hub and (re)sends all reporting settings, then reads them back. Use after pairing or when something looks wrong.<br>' +
   '<b>Refresh</b>: reads temperature, humidity and battery now. The sensor sleeps, so it is answered after its next report.<br>' +
   '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
@@ -105,7 +105,7 @@ import java.math.RoundingMode
   '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min). Saving the preferences again re-applies your own settings.<br>' +
   '<b>Self Test</b>: developer check. Feeds recorded and constructed frames and the queue-engine scenarios through the real code and reports pass/fail in the Logs (for example "SELFTEST N/N passed"). Nothing is sent to the sensor, nothing is published, no button press is needed.<br>' +
   '<b>Replay Frame</b>: developer tool. Paste a raw Hubitat description string (copy it from the Logs or from a Trace log line) to decode it again as if the sensor had just sent it. Events and Device Data ARE updated, but the queue is not involved and nothing is sent.<br>' +
-  '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i>'
+  '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i></span>'
 
 metadata {
     definition(name: 'Shelly BLU H&T ZB Reference', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true) {
