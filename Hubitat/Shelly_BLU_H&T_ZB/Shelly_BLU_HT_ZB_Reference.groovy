@@ -53,8 +53,6 @@ import java.math.RoundingMode
 @Field static final BigDecimal CLAMP_HUM_DELTA_MIN  = 0.5    // % RH
 @Field static final BigDecimal CLAMP_HUM_DELTA_MAX  = 20.0
 @Field static final int CLAMP_MAX_MAX_S = 64800   // longest 'report at least every' offered (18 hours; ZCL allows up to 0xFFFE)
-@Field static final Map REPORT_EVERY = Collections.unmodifiableMap(['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes',
-    '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'])
 @Field static final int REPORTING_OFF_MAX_S = 0xFFFF  // ZCL: max interval 0xFFFF = stop reporting (entry removed on this sensor)
 
 // Queue engine timing (all measured on the sensor: every frame it sends opens a window >= 6.5 s, ~1 s per command, one at a time).
@@ -128,11 +126,11 @@ metadata {
     preferences {
         input name: 'tempMin',   type: 'number',  title: 'Temperature: shortest time between reports (seconds, 30-3600)',  range: '30..3600', defaultValue: 60
         input name: 'tempDelta', type: 'decimal', title: 'Temperature: report when it changes by (\u00b0C, 0.05-5)',            defaultValue: 0.10
-        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: REPORT_EVERY, defaultValue: '3600'
+        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
         input name: 'humMin',    type: 'number',  title: 'Humidity: shortest time between reports (seconds, 30-3600)',     range: '30..3600', defaultValue: 60
         input name: 'humDelta',  type: 'decimal', title: 'Humidity: report when it changes by (% RH, 0.5-20)',             defaultValue: 2.0
-        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: REPORT_EVERY, defaultValue: '3600'
-        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: REPORT_EVERY, defaultValue: '3600'
+        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
+        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'logEnable', type: 'bool',    title: 'Debug logging (turns itself off after 30 minutes)', defaultValue: false
