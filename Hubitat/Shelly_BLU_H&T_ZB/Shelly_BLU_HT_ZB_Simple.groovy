@@ -3,10 +3,12 @@
  *
  *  Temperature, humidity and battery for the Shelly BLU H&T ZB (battery-powered Zigbee sleepy end device).
  *
- *  This driver takes the sensor as it is configured: it has NO preferences for reporting intervals or offsets.
+ *  This driver takes the sensor as it is configured: it has NO preferences for reporting intervals or change thresholds
+ *  (only temperature/humidity offsets and debug logging).
  *  The sensor's current reporting settings are read back from it and shown as State Variables
  *  (temperatureReporting, humidityReporting, batteryReporting). The command "resetReportingToFactory" puts the sensor
- *  back to its factory reporting. For custom reporting settings (intervals, change thresholds, off, offsets) switch the
+ *  back to its factory reporting. A new or re-joined sensor is set once to this driver's battery-friendly reporting
+ *  (temperature and humidity: at least every 1 hour; battery: every 12 hours). For custom reporting settings (intervals, change thresholds, off) switch the
  *  device to the "Shelly BLU H&T ZB Reference" driver, set them there, then switch back.
  *
  *  PAIRING: Add Device > Zigbee > "Pair using strict Zigbee 3.0 mode" (normal pairing makes the sensor leave again),
@@ -22,7 +24,8 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.0.0-simple'
+@Field static final String DRIVER_VERSION = '1.1.0-simple'
+@Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
 // Queue engine timing (measured on the sensor: every frame it sends opens a window >= 6.5 s, ~1 s per command, one at a time).
@@ -39,6 +42,9 @@ import java.math.RoundingMode
     '0402': [attr: '0000', type: 0x29, name: 'temperature', base: 10, key: 'temperatureReporting'],
     '0405': [attr: '0000', type: 0x21, name: 'humidity',    base: 20, key: 'humidityReporting'],
     '0001': [attr: '0021', type: 0x20, name: 'battery',     base: 30, key: 'batteryReporting']])
+// Applied once on a fresh pair / rejoin (a new join resets the sensor to factory reporting): battery-friendly, in raw units.
+@Field static final Map DEFAULT_REPORTING = Collections.unmodifiableMap([
+    '0402': [min: 60, max: 3600, delta: 10], '0405': [min: 60, max: 3600, delta: 200], '0001': [min: 300, max: 43200, delta: 1]])
 // factory reporting of the sensor (raw units: 0.01 degC, 0.01 %RH, 0.5 % battery)
 @Field static final Map FACTORY = Collections.unmodifiableMap([
     '0402': [min: 60, max: 900, delta: 1], '0405': [min: 60, max: 900, delta: 1], '0001': [min: 300, max: 1200, delta: 1]])
@@ -52,6 +58,9 @@ import java.math.RoundingMode
     '8D': 'INVALID_DATA_TYPE', '8E': 'INVALID_SELECTOR', '8F': 'WRITE_ONLY', 'C3': 'UNSUPPORTED_CLUSTER'])
 
 // Basic cluster attributes that become Device Data (manufacturer / model / application belong to the platform).
+// ZCL Basic cluster PowerSource (attribute 0x0007): bits 0-6 = source, bit 7 = battery backup available.
+@Field static final Map POWER_SOURCES = Collections.unmodifiableMap([0: 'Unknown', 1: 'Mains (single phase)', 2: 'Mains (3 phase)', 3: 'Battery',
+    4: 'DC source', 5: 'Emergency mains (constantly powered)', 6: 'Emergency mains (with transfer switch)'])
 @Field static final Map BASIC_DATA = Collections.unmodifiableMap(['0000': 'zclVersion', '0007': 'powerSource', '4000': 'swBuildId'])
 
 metadata {
@@ -64,8 +73,11 @@ metadata {
         capability 'Configuration'
 
         attribute 'configStatus', 'string'
+        attribute 'batteryLastReplaced', 'string'   // set by the batteryReplaced command
 
         command 'resetReportingToFactory'
+        command 'batteryReplaced'
+        command 'initialize'
 
         // Output clusters differ between firmware/driver descriptions: list the variants.
         fingerprint profileId: '0104', endpointId: '01', deviceId: '0302', inClusters: '0000,0001,0003,0402,0405',
@@ -79,6 +91,8 @@ metadata {
     }
 
     preferences {
+        input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
+        input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'logEnable', type: 'bool', title: 'Debug logging (turns itself off after 30 minutes)', defaultValue: false
     }
 }
@@ -87,18 +101,21 @@ metadata {
 
 void installed() {
     initState()
-    queueSetup('installed')
+    writeDeviceData()
+    queueSetup('installed', true)
 }
 
 void updated() {
     unschedule('debugOff')
     if (settings?.logEnable) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
     initState()
+    writeDeviceData()
 }
 
 // Configure: bind the clusters and read what the sensor is configured for (reporting itself is not changed).
 void configure() {
     initState()
+    writeDeviceData()
     queueSetup('configure')
 }
 
@@ -127,6 +144,12 @@ void resetReportingToFactory() {
 }
 
 void healthCheck() { unschedule('healthCheck') }      // left over from the Reference driver's schedule after a driver switch
+
+void batteryReplaced() {
+    String d = new Date().format('yyyy-MM-dd', location.timeZone)
+    sendEvent(name: 'batteryLastReplaced', value: d, descriptionText: "${device.displayName} battery replaced ${d}".toString())
+    logInfo "battery replacement recorded: ${d}"
+}
 
 void debugOff() {
     device.updateSetting('logEnable', [value: 'false', type: 'bool'])
@@ -307,7 +330,7 @@ private Map handleOneAttr(String cluster, String attrRaw, String value, String e
         if (cluster == '0402' && attr == '0000') {
             int raw = signed16(value)
             if (raw == -32768) return [text: "${what} -> temperature INVALID, ignored".toString(), ok: true, invalid: true]
-            BigDecimal c = new BigDecimal(raw).divide(100G, 2, RoundingMode.HALF_UP)
+            BigDecimal c = (new BigDecimal(raw).divide(100G, 2, RoundingMode.HALF_UP) + toDec(settings?.tempOffset)).setScale(2, RoundingMode.HALF_UP)
             def tv = convertTemperatureIfNeeded(c, 'C', 2)
             sendEvent(name: 'temperature', value: tv, unit: "°${location.temperatureScale}",
                       descriptionText: "${device.displayName} temperature is ${tv}°${location.temperatureScale}".toString())
@@ -316,8 +339,8 @@ private Map handleOneAttr(String cluster, String attrRaw, String value, String e
         if (cluster == '0405' && attr == '0000') {
             int raw = Integer.parseInt(value, 16)
             if (raw == 0xFFFF) return [text: "${what} -> humidity INVALID, ignored".toString(), ok: true, invalid: true]
-            BigDecimal h = new BigDecimal(raw).divide(100G, 2, RoundingMode.HALF_UP).max(0G).min(100G)
-            sendEvent(name: 'humidity', value: h, unit: '%', descriptionText: "${device.displayName} humidity is ${h}%".toString())
+            BigDecimal h = (new BigDecimal(raw).divide(100G, 2, RoundingMode.HALF_UP) + toDec(settings?.humOffset)).setScale(2, RoundingMode.HALF_UP).max(0G).min(100G)
+            sendEvent(name: 'humidity', value: h, unit: '%RH', descriptionText: "${device.displayName} humidity is ${h} %RH".toString())
             return [text: "${what} -> ${h} %RH".toString(), ok: true]
         }
         if (cluster == '0001' && attr == '0021') {
@@ -328,8 +351,9 @@ private Map handleOneAttr(String cluster, String attrRaw, String value, String e
             return [text: "${what} -> ${pct} %".toString(), ok: true]
         }
         if (cluster == '0000' && BASIC_DATA[attr]) {
-            setData(BASIC_DATA[attr] as String, value)      // string attributes arrive already converted to text by the platform
-            return [text: "${what} -> data ${BASIC_DATA[attr]}=${value}".toString(), ok: true]
+            String shown = (attr == '0007') ? powerSourceText(value) : value      // string attributes arrive already converted to text by the platform
+            setData(BASIC_DATA[attr] as String, shown)
+            return [text: "${what} -> data ${BASIC_DATA[attr]}=${shown}".toString(), ok: true]
         }
     } catch (Exception e) {
         return [text: "${what} -> DECODE ERROR ${e.class.simpleName}: ${e.message}".toString(), ok: false]
@@ -531,7 +555,7 @@ private Map enqueue(String kind, String cluster, String attr, int prio, Map p = 
 // ---- queue helpers
 private boolean hasQueued() { ((state.queue ?: []) as List).any { Map i -> i.status == 'queued' } }
 
-private void queueSetup(String reason) {
+private void queueSetup(String reason, boolean applyDefaults = false) {
     initState()
     state.gen = ((state.gen ?: 0) as int) + 1
     state.remove('needsConfig')
@@ -540,10 +564,11 @@ private void queueSetup(String reason) {
     for (String cl in CLUSTERS) {
         Map spec = CLUSTER_SPEC[cl] as Map
         enqueue('bind', cl, '', spec.base as int)
+        if (applyDefaults) enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, new LinkedHashMap(DEFAULT_REPORTING[cl] as Map))
         enqueue('rcr', cl, spec.attr as String, (spec.base as int) + 1)
     }
     queueReads(true)
-    logInfo "${reason}: ${((state.queue ?: []) as List).count { Map i -> i.status == 'queued' }} items queued, sent after the next report from the sensor"
+    logInfo "${reason}: ${((state.queue ?: []) as List).count { Map i -> i.status == 'queued' }} items queued${applyDefaults ? ' (including the battery-friendly reporting settings)' : ''}, sent after the next report from the sensor"
     publishStatus()
 }
 
@@ -581,7 +606,7 @@ private void handleRejoin(String nwk) {
         return
     }
     state.lastRejoinAt = t
-    queueSetup('rejoin')
+    queueSetup('rejoin', true)
 }
 
 // ---- command windows
@@ -865,10 +890,76 @@ private void initState() {
         state.session     = null      // open command window: id, trigger, openedAt, budgetEnd, sent, acked
         state.failed      = []
         state.nwk         = device.deviceNetworkId
-        for (String a in ['healthStatus', 'lastCheckin', 'batteryVoltage', 'batteryLastReplaced']) {      // attributes of the Reference driver
+        for (String a in ['healthStatus', 'lastCheckin', 'batteryVoltage']) {      // attributes of the Reference driver
             try { device.deleteCurrentState(a) } catch (Exception e) { /* not present */ }
         }
     }
+}
+
+
+// ------------------------------------------------------------------ Initialize: remove everything this driver does not use
+@Field static final List USED_ATTRIBUTES = ['temperature', 'humidity', 'battery', 'configStatus', 'batteryLastReplaced']
+@Field static final List USED_STATE = ['drv', 'needsConfig', 'queue', 'nextId', 'gen', 'sid', 'session', 'failed', 'nwk', 'lastParseWarnAt', 'lastRejoinAt', 'lastVerifyQueueAt', 'sendHour', 'temperatureReporting', 'humidityReporting', 'batteryReporting']
+@Field static final List USED_DATA = ['manufacturer', 'model', 'application', 'endpointId', 'ieee', 'swBuildId', 'zclVersion', 'powerSource', 'batteryType', 'inClusters', 'outClusters']
+
+// Removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (left over from other
+// drivers or older versions). The work queue and everything the driver relies on are kept. Safe to run at any time.
+void initialize() {
+    initState()
+    List gone = []
+    try {
+        for (String n in ((device.getCurrentStates() ?: []).collect { it.name as String }).unique()) {
+            if (!(n in USED_ATTRIBUTES)) { device.deleteCurrentState(n); gone << "attribute ${n}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean Current States: ${e.message}" }
+    try {
+        for (String k in new ArrayList(state.keySet() as Collection)) {
+            if (!(k in USED_STATE)) { state.remove(k); gone << "state ${k}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean State Variables: ${e.message}" }
+    try {
+        for (String k in new ArrayList(((device.getData() ?: [:]) as Map).keySet())) {
+            if (!(k in USED_DATA)) { device.removeDataValue(k); gone << "data ${k}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean Device Data: ${e.message}" }
+    normalizePowerSource()
+    unschedule()
+    if (settings?.logEnable) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
+    logInfo "initialize: removed ${gone ? gone.join(', ') : 'nothing'}; scheduled jobs reset"
+}
+
+// 0x03 = Battery. Shown as text in Device Data; an already-decoded text is left alone.
+private String powerSourceText(String raw) {
+    String r = raw?.trim()
+    if (!r || !(r ==~ /(?i)[0-9a-f]{1,2}/)) return raw
+    int v = Integer.parseInt(r, 16)
+    String base = POWER_SOURCES[v & 0x7F] ?: "Unknown (0x${r.toUpperCase()})".toString()
+    return ((v & 0x80) != 0) ? "${base} (battery backup)".toString() : base
+}
+
+// Earlier versions stored the raw code (e.g. "03"): convert it.
+private void normalizePowerSource() {
+    String p = device.getDataValue('powerSource')
+    if (p != null) {
+        String t = powerSourceText(p)
+        if (t != p) device.updateDataValue('powerSource', t)
+    }
+}
+
+// ------------------------------------------------------------------ Device Data (same as the Reference driver)
+
+private void writeDeviceData() {
+    device.updateDataValue('batteryType', BATTERY_TYPE)
+    for (String k in ['mfrName', 'modelId', 'appVersion']) {        // legacy copies of platform-owned values
+        if (device.getDataValue(k) != null) device.removeDataValue(k)
+    }
+    normalizePowerSource()
+    // ieee, swBuildId, zclVersion and powerSource are written from announce / Basic read responses.
+    // manufacturer, model, application and endpointId belong to the platform: never written here.
+}
+
+private BigDecimal toDec(Object v) {
+    try { return (v == null || v.toString().trim() == '') ? 0G : new BigDecimal(v.toString()) } catch (Exception e) { return 0G }
 }
 
 // ------------------------------------------------------------------ helpers

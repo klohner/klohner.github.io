@@ -13,7 +13,7 @@
  *  reporting_tests_2026-10-15_pm.md):
  *    - Pair with Hubitat "Pair using strict Zigbee 3.0 mode" + 5 button presses (normal pairing makes the sensor leave).
  *    - Every report the sensor sends opens a command window of >= 6.5 s: queue changes, send them right after a report.
- *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %).
+ *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min, 1 hour max (battery 12 hours).
  *    - The sensor enforces no limits on reporting intervals, so this driver clamps them itself (CLAMP_* below).
  *    - Humidity can be switched off (max interval 0xFFFF removes the reporting entry) or throttled.
  *
@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.5.0-everymenu'
+@Field static final String DRIVER_VERSION = '0.6.0-initialize'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -75,7 +75,7 @@ import java.math.RoundingMode
 // Defaults = a deliberate, battery-friendly setting (not the factory one).
 @Field static final Map DEFAULTS = Collections.unmodifiableMap([tempMin: 60, tempEvery: '3600', tempDelta: 0.10,
                                     humMin: 60, humEvery: '3600', humDelta: 2.0,
-                                    battMin: 300, battEvery: '3600', tempOffset: 0, humOffset: 0,
+                                    battMin: 300, battEvery: '43200', tempOffset: 0, humOffset: 0,
                                     logEnable: false, traceEnable: false])
 
 // ZCL status codes (Configure Reporting / Read Reporting / Default Response / Read Attributes)
@@ -88,8 +88,24 @@ import java.math.RoundingMode
 
 // Basic cluster attributes that become Device Data. manufacturer / model / application belong to the platform.
 @Field static final Map BASIC_DATA = Collections.unmodifiableMap(['0000': 'zclVersion', '0007': 'powerSource', '4000': 'swBuildId'])
+
+// ZCL Basic cluster PowerSource (attribute 0x0007): bits 0-6 = source, bit 7 = battery backup available.
+@Field static final Map POWER_SOURCES = Collections.unmodifiableMap([0: 'Unknown', 1: 'Mains (single phase)', 2: 'Mains (3 phase)', 3: 'Battery',
+    4: 'DC source', 5: 'Emergency mains (constantly powered)', 6: 'Emergency mains (with transfer switch)'])
 @Field static final Map BASIC_LOG_ONLY = Collections.unmodifiableMap(['0001': 'application', '0002': 'stackVersion', '0003': 'hwVersion',
                                                                       '0004': 'manufacturer', '0005': 'model', '0006': 'dateCode'])
+
+// Explanation of the Commands, shown on the Preferences page.
+@Field static final String HELP_HTML = '<b>What the Commands do</b><br>' +
+  '<b>Configure</b>: binds the sensor to the hub and (re)sends all reporting settings, then reads them back. Use after pairing or when something looks wrong.<br>' +
+  '<b>Refresh</b>: reads temperature, humidity and battery now. The sensor sleeps, so it is answered after its next report.<br>' +
+  '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
+  '<b>Initialize</b>: removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (leftovers from other drivers or older versions). The work queue is kept.<br>' +
+  '<b>Clear Queue</b>: throws away everything waiting to be sent to the sensor (and the failed list). Nothing is sent. Use Configure or save the preferences to queue the work again.<br>' +
+  '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min). Saving the preferences again re-applies your own settings.<br>' +
+  '<b>Self Test</b>: developer check. Feeds recorded and constructed frames and the queue-engine scenarios through the real code and reports pass/fail in the Logs (for example "SELFTEST 61/61 passed"). Nothing is sent to the sensor, nothing is published, no button press is needed.<br>' +
+  '<b>Replay Frame</b>: developer tool. Paste a raw Hubitat description string (copy it from the Logs or from a Trace log line) to decode it again as if the sensor had just sent it. Events and Device Data ARE updated, but the queue is not involved and nothing is sent.<br>' +
+  '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i>'
 
 metadata {
     definition(name: 'Shelly BLU H&T ZB Reference', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true) {
@@ -107,6 +123,7 @@ metadata {
         attribute 'batteryLastReplaced', 'string'   // set by the batteryReplaced command
 
         command 'batteryReplaced'
+        command 'initialize'
         command 'clearQueue'
         command 'resetReportingToFactory'
         command 'selfTest'
@@ -130,9 +147,10 @@ metadata {
         input name: 'humMin',    type: 'number',  title: 'Humidity: shortest time between reports (seconds, 30-3600)',     range: '30..3600', defaultValue: 60
         input name: 'humDelta',  type: 'decimal', title: 'Humidity: report when it changes by (% RH, 0.5-20)',             defaultValue: 2.0
         input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
-        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
+        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours (recommended)', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '43200'
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
+        input name: 'cmdHelp', type: 'hidden', title: HELP_HTML
         input name: 'logEnable', type: 'bool',    title: 'Debug logging (turns itself off after 30 minutes)', defaultValue: false
         input name: 'traceEnable', type: 'bool',  title: 'Trace logging: log every received frame, raw and decoded (turns itself off after 30 minutes)', defaultValue: false
     }
@@ -452,8 +470,8 @@ private Map handleOneAttr(String cluster, String attrRaw, String value, String e
             if (raw == 0xFFFF) return [text: "${what} -> humidity INVALID (0xFFFF), ignored".toString(), ok: true, invalid: true]
             BigDecimal h = (new BigDecimal(raw).divide(100G, 2, RoundingMode.HALF_UP) + (testing() ? 0G : toDec(pref('humOffset')))).setScale(2, RoundingMode.HALF_UP)
             h = h.max(0G).min(100G)
-            emit([name: 'humidity', value: h, unit: '%',
-                  descriptionText: "${device.displayName} humidity is ${h}%".toString()])
+            emit([name: 'humidity', value: h, unit: '%RH',
+                  descriptionText: "${device.displayName} humidity is ${h} %RH".toString()])
             return [text: "${what} -> ${h} %RH".toString(), ok: true]
         }
         if (cluster == '0001' && attr == '0021') {
@@ -473,7 +491,7 @@ private Map handleOneAttr(String cluster, String attrRaw, String value, String e
             return [text: "${what} -> ${v} V".toString(), ok: true]
         }
         if (cluster == '0000') {
-            String shown = value      // string attributes (type 0x41/0x42) arrive already converted to text by the platform
+            String shown = (attr == '0007') ? powerSourceText(value) : value      // string attributes (type 0x41/0x42) arrive already converted to text by the platform
             if (BASIC_DATA[attr]) {
                 setData(BASIC_DATA[attr] as String, shown)
                 return [text: "${what} -> data ${BASIC_DATA[attr]}=${shown}".toString(), ok: true]
@@ -805,7 +823,7 @@ private List<Map> selfTestVectors() {
          d: 'read attr - raw: A2640100001E0500420A424C5520482654205A42, dni: A264, endpoint: 01, cluster: 0000, size: 1E, attrId: 0005, encoding: 42, command: 01, value: 0A424C5520482654205A42'],
         [n: 'manufacturer string is platform-owned (real)', kind: 'RD_RSP', noEvents: true, has: 'manufacturer=Shelly',
          d: 'read attr - raw: A26401000016040042065368656C6C79, dni: A264, endpoint: 01, cluster: 0000, size: 16, attrId: 0004, encoding: 42, command: 01, value: 065368656C6C79'],
-        [n: 'power source 0x03 = battery (real)', kind: 'RD_RSP', data: [powerSource: '03'], noEvents: true,
+        [n: 'power source 0x03 is decoded to Battery (real)', kind: 'RD_RSP', data: [powerSource: 'Battery'], noEvents: true,
          d: 'read attr - raw: A2640100000A07003003, dni: A264, endpoint: 01, cluster: 0000, size: 0A, attrId: 0007, encoding: 30, command: 01, value: 03'],
         [n: 'unsupported attribute (built)', kind: 'RD_RSP', ok: false, noEvents: true,
          d: 'read attr - raw: A2640100000C02008600, dni: A264, endpoint: 01, cluster: 0000, size: 0C, attrId: 0002, encoding: 86, command: 01, value: 00'],
@@ -1582,11 +1600,64 @@ private void initState() {
     }
 }
 
+
+// ------------------------------------------------------------------ Initialize: remove everything this driver does not use
+@Field static final List USED_ATTRIBUTES = ['temperature', 'humidity', 'battery', 'batteryVoltage', 'configStatus', 'healthStatus', 'lastCheckin', 'batteryLastReplaced']
+@Field static final List USED_STATE = ['drv', 'needsConfig', 'queue', 'nextId', 'gen', 'sid', 'session', 'applied', 'bound', 'failed', 'verifyTries', 'nwk', 'lastCheckinAt', 'health', 'healthSched', 'lastParseWarnAt', 'lastRejoinAt', 'lastRxAt', 'lastVerifyQueueAt', 'sendHour', 'configuredAt', 'replayMode']
+@Field static final List USED_DATA = ['manufacturer', 'model', 'application', 'endpointId', 'ieee', 'swBuildId', 'zclVersion', 'powerSource', 'batteryType', 'inClusters', 'outClusters']
+
+// Removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (left over from other
+// drivers or older versions). The work queue and everything the driver relies on are kept. Safe to run at any time.
+void initialize() {
+    initState()
+    List gone = []
+    try {
+        for (String n in ((device.getCurrentStates() ?: []).collect { it.name as String }).unique()) {
+            if (!(n in USED_ATTRIBUTES)) { device.deleteCurrentState(n); gone << "attribute ${n}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean Current States: ${e.message}" }
+    try {
+        for (String k in new ArrayList(state.keySet() as Collection)) {
+            if (!(k in USED_STATE)) { state.remove(k); gone << "state ${k}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean State Variables: ${e.message}" }
+    try {
+        for (String k in new ArrayList(((device.getData() ?: [:]) as Map).keySet())) {
+            if (!(k in USED_DATA)) { device.removeDataValue(k); gone << "data ${k}".toString() }
+        }
+    } catch (Exception e) { logWarn "initialize: could not clean Device Data: ${e.message}" }
+    normalizePowerSource()
+    unschedule()
+    state.healthSched = DRIVER_VERSION
+    scheduleHealth()
+    if (pref('logEnable') || pref('traceEnable')) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
+    logInfo "initialize: removed ${gone ? gone.join(', ') : 'nothing'}; scheduled jobs reset"
+}
+
+// 0x03 = Battery. Shown as text in Device Data; an already-decoded text is left alone.
+private String powerSourceText(String raw) {
+    String r = raw?.trim()
+    if (!r || !(r ==~ /(?i)[0-9a-f]{1,2}/)) return raw
+    int v = Integer.parseInt(r, 16)
+    String base = POWER_SOURCES[v & 0x7F] ?: "Unknown (0x${r.toUpperCase()})".toString()
+    return ((v & 0x80) != 0) ? "${base} (battery backup)".toString() : base
+}
+
+// Earlier versions stored the raw code (e.g. "03"): convert it.
+private void normalizePowerSource() {
+    String p = device.getDataValue('powerSource')
+    if (p != null) {
+        String t = powerSourceText(p)
+        if (t != p) device.updateDataValue('powerSource', t)
+    }
+}
+
 // ------------------------------------------------------------------ Device Data (standard, see spec)
 
 private void writeDeviceData() {
     device.updateDataValue('batteryType', BATTERY_TYPE)
     cleanLegacyData()
+    normalizePowerSource()
     // ieee, swBuildId, zclVersion and powerSource are written from announce / Basic read responses.
     // manufacturer, model, application and endpointId belong to the platform: never written here.
 }
