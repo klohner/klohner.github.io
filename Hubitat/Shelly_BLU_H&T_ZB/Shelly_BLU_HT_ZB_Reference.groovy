@@ -1,7 +1,8 @@
 /**
  *  Shelly BLU H&T ZB (SBHT-203C) - Reference driver
  *
- *  STATUS: v0.3.0-queue (Plan step 4.3). Metadata, preferences, logging, state schema, Device Data standard (4.1), the
+ *  STATUS: v0.4.0-features (Plan step 4.4): adds resetReportingToFactory, health check (offline after 3x the temperature max interval),
+ *  batteryReplaced date. Earlier: v0.3.0-queue (Plan step 4.3). Metadata, preferences, logging, state schema, Device Data standard (4.1), the
  *  complete frame PARSER (4.2) and the SLEEPY-DEVICE QUEUE ENGINE (4.3): configure()/updated()/refresh() queue items, a
  *  frame from the sensor opens a command window, items are sent one at a time, replies are matched by content, every
  *  reporting configuration is read back and verified. Still to come (4.4): offsets/units polish, health/offline check,
@@ -34,7 +35,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.3.0-queue'
+@Field static final String DRIVER_VERSION = '0.4.0-features'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -101,7 +102,9 @@ metadata {
         attribute 'configStatus',   'string'   // e.g. "Configured", "Pending: 3 items", "Failed: see log"
         attribute 'healthStatus',   'string'   // online / offline / unknown
         attribute 'lastCheckin',    'string'   // throttled
+        attribute 'batteryLastReplaced', 'string'   // set by the batteryReplaced command
 
+        command 'batteryReplaced'
         command 'clearQueue'
         command 'resetReportingToFactory'
         command 'selfTest'
@@ -140,6 +143,7 @@ void installed() {
     logInfo "installed (v${DRIVER_VERSION})"
     initState()
     writeDeviceData()
+    scheduleHealth()
     queueConfig('installed', true, true)
 }
 
@@ -149,6 +153,7 @@ void updated() {
     if (pref('logEnable') || pref('traceEnable')) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
     initState()
     writeDeviceData()
+    scheduleHealth()
     queueConfig('preferences saved', false, false)     // only what differs from what the sensor acknowledged
 }
 
@@ -179,11 +184,46 @@ void clearQueue() {
 }
 
 void resetReportingToFactory() {
-    logInfo 'reset reporting to factory requested'
-    // 4.4: queue CR temperature+humidity 60/900 s change 0.01, battery 300/1200 s change 1.
-    //      Use a SEPARATE builder with hard-coded raw values: it must bypass the clamps (factory deltas 0.01 are below the offered minimums).
-    logWarn 'resetReportingToFactory is not implemented yet (step 4.4)'
+    initState()
+    if (!testing()) logInfo 'reset reporting to factory requested: temperature and humidity 60/900 s change 0.01, battery 300/1200 s change 0.5 %'
+    state.remove('needsConfig')
+    state.gen = ((state.gen ?: 0) as int) + 1
+    state.verifyTries = [:]
+    state.failed = []
+    state.queue = []                      // everything else is dropped, including an in-flight item (its late reply finds no match)
+    // hard-coded raw values: these deliberately bypass the clamps (factory deltas are below the offered minimums)
+    for (String cl in CLUSTERS) {
+        Map spec = CLUSTER_SPEC[cl] as Map
+        Map fp = (cl == '0001') ? [min: 300, max: 1200, delta: 1, off: false] : [min: 60, max: 900, delta: 1, off: false]
+        enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, fp)
+    }
+    if (!testing()) logInfo 'saving the preferences again re-applies your own settings'
+    publishStatus()
 }
+
+void batteryReplaced() {
+    String d = new Date().format('yyyy-MM-dd', location.timeZone)
+    sendEvent(name: 'batteryLastReplaced', value: d, descriptionText: "${device.displayName} battery replaced ${d}".toString())
+    logInfo "battery replacement recorded: ${d}"
+}
+
+// Offline when nothing was received for 3x the temperature max interval (min 10 min).
+void healthCheck() {
+    initState()
+    long last = (state.lastRxAt ?: 0L) as long
+    if (!last) return
+    // what the SENSOR holds (last acknowledged), not what the preferences say; a pending change must not shorten the limit
+    String cfg = ((state.applied ?: [:]) as Map)['0402']?.cfg
+    int tMax = cfg ? Integer.parseInt(cfg.split('/')[1]) : Math.max(900, (buildDesired()['0402'] as Map).max as int)
+    long limit = Math.max(600000L, 3L * tMax * 1000L)
+    if (now() - last > limit && state.health != 'offline') {
+        state.health = 'offline'
+        sendEvent(name: 'healthStatus', value: 'offline', descriptionText: "${device.displayName} is offline (silent for more than ${(int) (limit / 60000L)} min)".toString())
+        log.warn "${device.displayName}: no frame from the sensor for more than ${(int) (limit / 60000L)} min: marked offline"
+    }
+}
+
+private void scheduleHealth() { runEvery15Minutes('healthCheck') }
 
 void debugOff() {
     device.updateSetting('logEnable', [value: 'false', type: 'bool'])
@@ -904,7 +944,13 @@ private void queueVerify() {
     Map desired = buildDesired()
     for (String cl in CLUSTERS) {
         Map spec = CLUSTER_SPEC[cl] as Map
-        enqueue('rcr', cl, spec.attr as String, 50 + ((spec.base as int) / 10 as int), desired[cl] as Map)
+        Map want = desired[cl] as Map
+        String cfg = ((state.applied ?: [:]) as Map)[cl]?.cfg     // the sensor should still hold what it last acknowledged (e.g. a factory reset)
+        if (cfg) {
+            List<String> pr = cfg.split('/') as List
+            want = [min: pr[0] as int, max: pr[1] as int, delta: pr[2] as int, off: ((pr[1] as int) == REPORTING_OFF_MAX_S)]
+        }
+        enqueue('rcr', cl, spec.attr as String, 50 + ((spec.base as int) / 10 as int), want)
     }
     if (!testing()) logInfo 'sensor announced itself again with the same network address (battery change?): its settings will be read back'
     publishStatus()
@@ -1466,6 +1512,23 @@ private Map runEngineTests() {
         stuck.sentAt = now() - 20000L
         feed(REPORT_T)
         check('E15 stale item released', stuck.status == 'queued' && ((stuck.tries ?: 0) as int) == 1, stuck.toString())
+
+        // E16 factory reset queues Configure Reporting with the raw factory values, no binds, clamps bypassed
+        reset(null)
+        state.testPrefs = new LinkedHashMap(DEFAULTS) + [tempDelta: 0.5]
+        resetReportingToFactory()
+        List fq = queue().findAll { Map i -> i.kind == 'cr' }
+        check('E16 three CRs, no binds', fq.size() == 3 && !queue().any { Map i -> i.kind == 'bind' }, queue().toString())
+        check('E16 factory values', fq.every { Map i -> (i.cluster == '0001') ? cfgOf(i.p as Map) == '300/1200/1' : cfgOf(i.p as Map) == '60/900/1' }, fq.toString())
+        feed(REPORT_T)
+        check('E16 first send is the temperature CR', txs().size() == 1 && txs()[0].toString().startsWith('cr|0402|'), txs().toString())
+
+        // E17 an announce after a factory reset reads back against what the sensor was given, not against the preferences
+        reset(null)
+        state.applied = ['0402': [cfg: '60/900/1', verified: true], '0405': [cfg: '60/900/1', verified: true], '0001': [cfg: '300/1200/1', verified: true]]
+        queueVerify()
+        Map rq = queue().find { Map i -> i.kind == 'rcr' && i.cluster == '0402' } as Map
+        check('E17 verify expects the applied values', rq != null && cfgOf(rq.p as Map) == '60/900/1', rq?.toString())
     } catch (Exception e) {
         total++
         fails << "FAIL engine exception ${e.class.simpleName}: ${e.message}".toString()
@@ -1496,6 +1559,10 @@ private void initState() {
         state.nwk     = device.deviceNetworkId
         state.lastCheckinAt = 0L
         state.health  = 'unknown'
+    }
+    if (state.healthSched != DRIVER_VERSION) {      // also covers installs that predate the health check
+        scheduleHealth()
+        state.healthSched = DRIVER_VERSION
     }
 }
 
