@@ -24,7 +24,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.1.0-simple'
+@Field static final String DRIVER_VERSION = '1.1.1-simple'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
@@ -924,6 +924,9 @@ void initialize() {
     } catch (Exception e) { logWarn "initialize: could not clean Device Data: ${e.message}" }
     normalizePowerSource()
     unschedule()
+    Map inFlight = ((state.queue ?: []) as List).find { Map i -> i.status == 'sent' } as Map      // keep the queue's own timers alive
+    if (inFlight != null) runInMillis(ITEM_TIMEOUT_MS, 'itemTimeout', [overwrite: true, data: [id: inFlight.id]])
+    else if (state.session) pumpSoon()
     if (settings?.logEnable) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
     logInfo "initialize: removed ${gone ? gone.join(', ') : 'nothing'}; scheduled jobs reset"
 }

@@ -13,7 +13,7 @@
  *  reporting_tests_2026-10-15_pm.md):
  *    - Pair with Hubitat "Pair using strict Zigbee 3.0 mode" + 5 button presses (normal pairing makes the sensor leave).
  *    - Every report the sensor sends opens a command window of >= 6.5 s: queue changes, send them right after a report.
- *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min, 1 hour max (battery 12 hours).
+ *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min and 1 hour max (battery: 300 s min, 12 hours max).
  *    - The sensor enforces no limits on reporting intervals, so this driver clamps them itself (CLAMP_* below).
  *    - Humidity can be switched off (max interval 0xFFFF removes the reporting entry) or throttled.
  *
@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.6.0-initialize'
+@Field static final String DRIVER_VERSION = '0.6.1-initialize'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -103,7 +103,7 @@ import java.math.RoundingMode
   '<b>Initialize</b>: removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (leftovers from other drivers or older versions). The work queue is kept.<br>' +
   '<b>Clear Queue</b>: throws away everything waiting to be sent to the sensor (and the failed list). Nothing is sent. Use Configure or save the preferences to queue the work again.<br>' +
   '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min). Saving the preferences again re-applies your own settings.<br>' +
-  '<b>Self Test</b>: developer check. Feeds recorded and constructed frames and the queue-engine scenarios through the real code and reports pass/fail in the Logs (for example "SELFTEST 61/61 passed"). Nothing is sent to the sensor, nothing is published, no button press is needed.<br>' +
+  '<b>Self Test</b>: developer check. Feeds recorded and constructed frames and the queue-engine scenarios through the real code and reports pass/fail in the Logs (for example "SELFTEST N/N passed"). Nothing is sent to the sensor, nothing is published, no button press is needed.<br>' +
   '<b>Replay Frame</b>: developer tool. Paste a raw Hubitat description string (copy it from the Logs or from a Trace log line) to decode it again as if the sensor had just sent it. Events and Device Data ARE updated, but the queue is not involved and nothing is sent.<br>' +
   '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i>'
 
@@ -1628,6 +1628,9 @@ void initialize() {
     } catch (Exception e) { logWarn "initialize: could not clean Device Data: ${e.message}" }
     normalizePowerSource()
     unschedule()
+    Map inFlight = ((state.queue ?: []) as List).find { Map i -> i.status == 'sent' } as Map      // keep the queue's own timers alive
+    if (inFlight != null) runInMillis(ITEM_TIMEOUT_MS, 'itemTimeout', [overwrite: true, data: [id: inFlight.id]])
+    else if (state.session) pumpSoon()
     state.healthSched = DRIVER_VERSION
     scheduleHealth()
     if (pref('logEnable') || pref('traceEnable')) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
