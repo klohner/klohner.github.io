@@ -117,9 +117,7 @@ void refresh() {
 // Puts the sensor's reporting back to the factory settings (temperature + humidity 60/900 s, change 0.01; battery 300/1200 s).
 void resetReportingToFactory() {
     initState()
-    state.remove('needsConfig')
-    state.failed = []
-    state.queue = []
+    state.failed = []              // pending setup items (bindings, reads) stay queued; cr items replace any older ones with the same key
     for (String cl in CLUSTERS) {
         Map spec = CLUSTER_SPEC[cl] as Map
         enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, new LinkedHashMap(FACTORY[cl] as Map))
@@ -127,6 +125,8 @@ void resetReportingToFactory() {
     logInfo 'reset to factory reporting: sent after the next report from the sensor'
     publishStatus()
 }
+
+void healthCheck() { unschedule('healthCheck') }      // left over from the Reference driver's schedule after a driver switch
 
 void debugOff() {
     device.updateSetting('logEnable', [value: 'false', type: 'bool'])
@@ -489,7 +489,7 @@ private String describeReporting(String cl, Map e) {
     }
     int mn = e.min as int
     int mx = e.max as int
-    if (mx == 0) return "${fmtShort(mn)} minimum, reports only when it changes by ${delta}".toString()
+    if (mx == 0 || mx == 0xFFFF) return "${fmtShort(mn)} minimum, no periodic report${delta ? ', only when it changes by ' + delta : ''}".toString()
     return "${fmtShort(mn)} minimum, at least every ${fmtLong(mx)}${delta ? ' or ' + delta + ' change' : ''}".toString()
 }
 
