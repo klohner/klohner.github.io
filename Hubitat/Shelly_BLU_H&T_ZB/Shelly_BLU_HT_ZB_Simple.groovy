@@ -24,7 +24,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.2.0-simple'
+@Field static final String DRIVER_VERSION = '1.3.0-simple'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
@@ -50,6 +50,9 @@ import java.math.RoundingMode
 // factory reporting of the sensor (raw units: 0.01 degC, 0.01 %RH, 0.5 % battery)
 @Field static final Map FACTORY = Collections.unmodifiableMap([
     '0402': [min: 60, max: 900, delta: 1], '0405': [min: 60, max: 900, delta: 1], '0001': [min: 300, max: 1200, delta: 1]])
+// recommended reporting (raw units): temperature 1 min / 1 hour / 0.1 C, humidity 1 min / 1 hour / 2 %RH, battery 5 min / 12 hours / 2 %
+@Field static final Map RECOMMENDED = Collections.unmodifiableMap([
+    '0402': [min: 60, max: 3600, delta: 10], '0405': [min: 60, max: 3600, delta: 200], '0001': [min: 300, max: 43200, delta: 4]])
 @Field static final Map CMD_ID = Collections.unmodifiableMap(['cr': '06', 'read': '00', 'rcr': '08'])
 
 @Field static final Map ZCL_STATUS = Collections.unmodifiableMap([
@@ -72,7 +75,8 @@ import java.math.RoundingMode
   '<b>Refresh</b>: reads temperature, humidity, battery and the reporting settings now. The sensor sleeps, so it is answered after its next report.<br>' +
   '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
   '<b>Initialize</b>: removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (leftovers from other drivers or older versions). The work queue is kept.<br>' +
-  '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min).<br>' +
+  '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting: temperature and humidity 1 minute to 15 minutes or 0.01 change, battery 5 to 20 minutes or 0.5 % change.<br>' +
+  '<b>Reset Reporting To Recommended</b>: queues the recommended reporting, which saves battery: temperature 1 minute to 1 hour or 0.1 \u00b0C change, humidity 1 minute to 1 hour or 2 %RH change, battery 5 minutes to 12 hours or 2 % change.<br>' +
   '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (at most about 15 minutes).</i></span>'
 
 metadata {
@@ -88,6 +92,7 @@ metadata {
         attribute 'batteryLastReplaced', 'string'   // set by the batteryReplaced command
 
         command 'resetReportingToFactory'
+        command 'resetReportingToRecommended'
         command 'batteryReplaced'
         command 'initialize'
 
@@ -145,14 +150,18 @@ void refresh() {
 }
 
 // Puts the sensor's reporting back to the factory settings (temperature + humidity 60/900 s, change 0.01; battery 300/1200 s).
-void resetReportingToFactory() {
+void resetReportingToFactory() { queueReportingSet(FACTORY, 'factory') }
+
+void resetReportingToRecommended() { queueReportingSet(RECOMMENDED, 'recommended') }
+
+private void queueReportingSet(Map set, String what) {
     initState()
     state.failed = []              // pending setup items (bindings, reads) stay queued; cr items replace any older ones with the same key
     for (String cl in CLUSTERS) {
         Map spec = CLUSTER_SPEC[cl] as Map
-        enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, new LinkedHashMap(FACTORY[cl] as Map))
+        enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, new LinkedHashMap(set[cl] as Map))
     }
-    logInfo 'reset to factory reporting: sent after the next report from the sensor'
+    logInfo "reset to ${what} reporting: sent after the next report from the sensor"
     publishStatus()
 }
 
@@ -708,7 +717,10 @@ private void closeSession() {
     state.session = null
     unschedule('pumpTick')
     unschedule('itemTimeout')
-    if (s != null) logDebug "S${s.id} window closed: ${s.sent} sent, ${s.acked} answered, ${((state.queue ?: []) as List).size()} left"
+    if (s != null) {
+        logDebug "S${s.id} window closed: ${s.sent} sent, ${s.acked} answered, ${((state.queue ?: []) as List).size()} left"
+        if ((s.sent as int) > 1) logInfo "queue window: ${s.sent} sent, ${s.acked} answered in ${String.format('%.1f', (now() - (s.openedAt as long)) / 1000.0)} s, ${((state.queue ?: []) as List).size()} left"
+    }
     publishStatus()
 }
 

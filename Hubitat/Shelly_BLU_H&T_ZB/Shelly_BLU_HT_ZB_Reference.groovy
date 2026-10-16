@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.7.1-burst'
+@Field static final String DRIVER_VERSION = '0.8.0-recommended'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -99,13 +99,14 @@ import java.math.RoundingMode
 
 // Explanation of the Commands, shown on the Preferences page.
 @Field static final String HELP_HTML = '<b>What the Commands do</b><br><span style="font-weight:normal">' +
-  '<b>Reporting defaults</b>: temperature and humidity at least every 15 minutes, battery at least every 20 minutes (the sensor\'s factory intervals, marked "(default)" in the menus), with a 0.1 \u00b0C / 2 %RH change threshold. Longer intervals save battery.<br>' +
+  '<b>Reporting defaults</b>: temperature and humidity at least every 15 minutes, battery at least every 20 minutes (the sensor\'s factory intervals, marked "(default, factory)" in the menus), with a 0.1 \u00b0C / 2 %RH change threshold. <b>Recommended</b> (marked "(recommended)" in the menus; saves battery): temperature at least every 1 hour (0.1 \u00b0C change), humidity at least every 1 hour (2 %RH change), battery at least every 12 hours (2 % change); shortest time between reports 1 minute (battery 5 minutes). <b>Factory</b>: temperature and humidity 1 minute to 15 minutes or 0.01 change, battery 5 to 20 minutes or 0.5 % change.<br>' +
   '<b>Configure</b>: binds the sensor to the hub and (re)sends all reporting settings, then reads them back. Use after pairing or when something looks wrong.<br>' +
   '<b>Refresh</b>: reads temperature, humidity and battery now. The sensor sleeps, so it is answered after its next report.<br>' +
   '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
   '<b>Initialize</b>: removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (leftovers from other drivers or older versions). The work queue is kept.<br>' +
   '<b>Clear Queue</b>: throws away everything waiting to be sent to the sensor (and the failed list). Nothing is sent. Use Configure or save the preferences to queue the work again.<br>' +
   '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min). Saving the preferences again re-applies your own settings.<br>' +
+  '<b>Reset Reporting To Recommended</b>: queues the recommended reporting: temperature 1 min to 1 hour or 0.1 \u00b0C change, humidity 1 min to 1 hour or 2 %RH change, battery 5 min to 12 hours or 2 % change. Saving the preferences again re-applies your own settings.<br>' +
   '<b>Self Test</b>: developer check. Feeds recorded and constructed frames and the queue-engine scenarios through the real code and reports pass/fail in the Logs (for example "SELFTEST N/N passed"). Nothing is sent to the sensor, nothing is published, no button press is needed.<br>' +
   '<b>Replay Frame</b>: developer tool. Paste a raw Hubitat description string (copy it from the Logs or from a Trace log line) to decode it again as if the sensor had just sent it. Events and Device Data ARE updated, but the queue is not involved and nothing is sent.<br>' +
   '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i></span>'
@@ -129,6 +130,7 @@ metadata {
         command 'initialize'
         command 'clearQueue'
         command 'resetReportingToFactory'
+        command 'resetReportingToRecommended'
         command 'selfTest'
         command 'replayFrame', [[name: 'Frame description string', type: 'STRING']]
 
@@ -146,11 +148,11 @@ metadata {
     preferences {
         input name: 'tempMin',   type: 'number',  title: 'Temperature: shortest time between reports (seconds, 30-3600)',  range: '30..3600', defaultValue: 60
         input name: 'tempDelta', type: 'decimal', title: 'Temperature: report when it changes by (\u00b0C, 0.05-5)',            defaultValue: 0.10
-        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
+        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default, factory)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
         input name: 'humMin',    type: 'number',  title: 'Humidity: shortest time between reports (seconds, 30-3600)',     range: '30..3600', defaultValue: 60
         input name: 'humDelta',  type: 'decimal', title: 'Humidity: report when it changes by (% RH, 0.5-20)',             defaultValue: 2.0
-        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
-        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1200': '20 minutes (default)', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '1200'
+        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default, factory)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
+        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1200': '20 minutes (default, factory)', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours (recommended)', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '1200'
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'cmdHelp', type: 'hidden', title: HELP_HTML
@@ -209,17 +211,30 @@ void clearQueue() {
 }
 
 void resetReportingToFactory() {
+    queueRawReporting('factory', [min: 60, max: 900, delta: 1], [min: 60, max: 900, delta: 1], [min: 300, max: 1200, delta: 1],
+        'temperature and humidity 60/900 s change 0.01, battery 300/1200 s change 0.5 %')
+}
+
+// Recommended: temperature 1 min / 1 hour / 0.1 degC, humidity 1 min / 1 hour / 2 %RH, battery 5 min / 12 hours / 2 % (raw: 10, 200, 4).
+void resetReportingToRecommended() {
+    queueRawReporting('recommended', [min: 60, max: 3600, delta: 10], [min: 60, max: 3600, delta: 200], [min: 300, max: 43200, delta: 4],
+        'temperature 60/3600 s change 0.1 C, humidity 60/3600 s change 2 %RH, battery 300/43200 s change 2 %')
+}
+
+private void queueRawReporting(String what, Map t, Map h, Map b, String text) {
     initState()
-    if (!testing()) logInfo 'reset reporting to factory requested: temperature and humidity 60/900 s change 0.01, battery 300/1200 s change 0.5 %'
+    if (!testing()) logInfo "reset reporting to ${what} requested: ${text}"
     state.remove('needsConfig')
     state.gen = ((state.gen ?: 0) as int) + 1
     state.verifyTries = [:]
     state.failed = []
     state.queue = []                      // everything else is dropped, including an in-flight item (its late reply finds no match)
-    // hard-coded raw values: these deliberately bypass the clamps (factory deltas are below the offered minimums)
+    // raw values: these deliberately bypass the clamps (factory deltas are below the offered minimums)
+    Map byCl = ['0402': t, '0405': h, '0001': b]
     for (String cl in CLUSTERS) {
         Map spec = CLUSTER_SPEC[cl] as Map
-        Map fp = (cl == '0001') ? [min: 300, max: 1200, delta: 1, off: false] : [min: 60, max: 900, delta: 1, off: false]
+        Map fp = new LinkedHashMap(byCl[cl] as Map)
+        fp.off = false
         enqueue('cr', cl, spec.attr as String, (spec.base as int) + 1, fp)
     }
     if (!testing()) logInfo 'saving the preferences again re-applies your own settings'
@@ -1099,7 +1114,10 @@ private void closeSession() {
         unschedule('pumpTick')
         unschedule('itemTimeout')
     }
-    if (s != null) logDebug "S${s.id} window closed: ${s.sent} sent, ${s.acked} answered, ${((state.queue ?: []) as List).size()} left"
+    if (s != null) {
+        logDebug "S${s.id} window closed: ${s.sent} sent, ${s.acked} answered, ${((state.queue ?: []) as List).size()} left"
+        if (!testing() && (s.sent as int) > 1) logInfo "queue window: ${s.sent} sent, ${s.acked} answered in ${String.format('%.1f', (now() - (s.openedAt as long)) / 1000.0)} s, ${((state.queue ?: []) as List).size()} left"
+    }
     publishStatus()
 }
 
