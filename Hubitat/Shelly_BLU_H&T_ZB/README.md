@@ -4,11 +4,11 @@ Work in progress. Drivers for the Shelly BLU H&T ZB, a battery-powered Zigbee sl
 
 | File | Status | Purpose |
 |---|---|---|
-| `Shelly_BLU_HT_ZB_Simple.groovy` | testing | Simple driver: temperature, humidity, battery. No reporting preferences (it takes the sensor as configured and shows the sensor's reporting as State Variables); offsets, Battery Replaced, Initialize, Reset Reporting To Factory |
+| `Shelly_BLU_HT_ZB_Simple.groovy` | testing | Simple driver: temperature, humidity, battery. No reporting preferences (it takes the sensor as configured and shows the sensor's reporting as State Variables); offsets, Battery Replaced, Initialize, Reset Reporting To Factory and Reset Reporting To Recommended |
 | `Shelly_BLU_HT_ZB_Reference.groovy` | testing | Full reference driver: parser, sleepy-device command queue, reporting menus ("report at least every"), offsets, health check, trace logging, Self Test, Replay Frame, Initialize |
 | `Shelly_BLU_HT_ZB_Probe.groovy` | working | Test driver that logs every Zigbee frame and runs timing/reporting experiments |
 
-Default reporting set by the drivers: the sensor's factory intervals, temperature and humidity at least every 15 minutes (change 0.1 °C / 2 %RH, 60 s minimum) and battery at least every 20 minutes. Longer intervals (menus in the Reference driver) save battery; Shelly publishes no recommendation for its "3 years" claim. "Reset Reporting To Factory" restores the exact factory values.
+Default reporting set by the drivers: the sensor's factory intervals, temperature and humidity at least every 15 minutes (change 0.1 °C / 2 %RH, 60 s minimum) and battery at least every 20 minutes. Longer intervals (menus in the Reference driver) save battery; Shelly publishes no recommendation for its "3 years" claim. "Reset Reporting To Factory and Reset Reporting To Recommended" restores the exact factory values.
 To use other reporting settings with the Simple driver, switch the device to the Reference driver, set them there, and switch back.
 
 ## Pairing (important)

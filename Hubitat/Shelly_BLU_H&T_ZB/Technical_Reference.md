@@ -1,6 +1,6 @@
 # Shelly BLU H&T ZB (SBHT-203C) — Technical Reference (D7)
 
-Version 1.0 · 2026-10-15 · covers Reference driver 0.7.1, Simple driver 1.2.0, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
+Version 1.0 · 2026-10-15 · covers Reference driver 0.8.0, Simple driver 1.3.0, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
 
 ## 1. The device
 - Battery Zigbee 3.0 sleepy end device (CR2032, vendor claim "3 years" with no stated conditions) with a Sensirion SHT40 sensor; also BLE/BTHome. Single endpoint 0x01, profile 0x0104 (HA), device id 0x0302.
@@ -30,14 +30,14 @@ Events: `temperature` (hub scale, offset applied), `humidity` (unit `%RH`, offse
 - Factory: temperature and humidity min 60 s / max 900 s / change 0.01; battery 300 s / 1200 s / change 0.5 %.
 - Driver defaults = the factory intervals with calmer change thresholds: temperature and humidity min 60 s, max 15 minutes, change 0.1 °C / 2 %RH; battery min 300 s, max 20 minutes, change 0.5 %. The Simple driver applies them only on a fresh pair or rejoin; "Reset Reporting To Factory" restores the exact factory values (change 0.01).
 - The sensor enforces no limits, so the Reference driver clamps (min 30–3600 s, max 60 s–18 h); max < min is rejected (0x87). Max interval 0xFFFF succeeds but removes the reporting entry (Read Reporting Configuration then answers 0x8B NOT_FOUND): reporting is off and the value only arrives on Refresh.
-- Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 20, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Defaults (marked in the menu): 15 minutes for temperature and humidity, 20 minutes for battery. Longer intervals save battery; Shelly publishes no recommendation.
+- Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 20, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Menu markers: "(default, factory)" = 15 minutes for temperature and humidity and 20 minutes for battery; "(recommended)" = 1 hour for temperature and humidity and 12 hours for battery. Longer intervals save battery; Shelly publishes no recommendation.
 
 ## 6. Drivers
-| | Reference 0.7.1 | Simple 1.2.0 |
+| | Reference 0.8.0 | Simple 1.3.0 |
 |---|---|---|
 | Purpose | everything, with diagnostics | temperature, humidity, battery |
 | Reporting | preferences (min, change, "at least every" menus) | none: accepts what the sensor holds; shown as State Variables `temperatureReporting`, `humidityReporting`, `batteryReporting` |
-| Commands | Configure, Refresh, Battery Replaced, Initialize, Clear Queue, Reset Reporting To Factory, Self Test, Replay Frame | Configure, Refresh, Battery Replaced, Initialize, Reset Reporting To Factory |
+| Commands | Configure, Refresh, Battery Replaced, Initialize, Clear Queue, Reset Reporting To Factory, Reset Reporting To Recommended, Self Test, Replay Frame | Configure, Refresh, Battery Replaced, Initialize, Reset Reporting To Factory, Reset Reporting To Recommended |
 | Extras | health check, lastCheckin, batteryVoltage, trace logging, 61 self-test checks, command help panel | offsets, debug logging |
 Both: offsets applied by the hub, Device Data standard of §1, queue engine of §4, Initialize (removes unused Current States, State Variables, Device Data and scheduled jobs; keeps the queue). To use non-standard reporting with the Simple driver: switch to the Reference driver, set it, switch back.
 The Probe driver logs every frame and runs the timing experiments; do not keep it installed next to the others for new pairings (they share fingerprints).
@@ -60,6 +60,14 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 
 ## 9. Changelog
 - Probe: frame capture and timing experiments.
-- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry. 0.7.1: self-test expectations updated (61/61 pass).
-- Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join. 1.2.0: burst queue, factory-interval defaults, commands help panel.
+- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry. 0.7.1: self-test expectations updated (61/61 pass). 0.8.0: Reset Reporting To Recommended, (default, factory) / (recommended) menu markers, info log "queue window: N sent, M answered in X s".
+- Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join. 1.2.0: burst queue, factory-interval defaults, commands help panel. 1.3.0: Reset Reporting To Recommended, queue window summary log.
 - Probe 0.5.1: lastCheckin / lastReport use yyyy-MM-dd HH:mm:ss.
+
+## 10. Reporting presets (Reference 0.8.0 / Simple 1.3.0)
+| Preset | Temperature | Humidity | Battery |
+|---|---|---|---|
+| Factory (observed) | 1 min / 15 min / 0.01 °C | 1 min / 15 min / 0.01 %RH | 5 min / 20 min / 0.5 % |
+| Driver default | 1 min / 15 min / 0.1 °C | 1 min / 15 min / 2 %RH | 5 min / 20 min / 0.5 % |
+| Recommended (saves battery) | 1 min / 1 hour / 0.1 °C | 1 min / 1 hour / 2 %RH | 5 min / 12 hours / 2 % |
+Commands "Reset Reporting To Factory" and "Reset Reporting To Recommended" queue the raw values (battery change raw 4 = 2 %) and are sent in the next report window. Both are listed in each driver's Preferences help panel. Each window that sends more than one item logs `queue window: N sent, M answered in X s, K left` at Info level (use it to see whether a long queue drains in one window).
