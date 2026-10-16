@@ -54,7 +54,7 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 - Window lengths have ±0.5 s granularity; first-boot behaviour cannot be repeated without a factory reset.
 - A late reply does not resume an already closed window; saving preferences drops a pending battery-pull verify.
 - Offline detection of the Reference driver is based on the temperature maximum interval and was not exercised live.
-- Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send the next command 0.25 s after each answer and extend the window by 2 s per answer (cap 30 s). Needs more samples (idle gaps of 2, 3, 4 s inside a burst).
+- Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send the next command 0.25 s after each answer and extend the window by 2 s per answer (cap 30 s). Needs more samples (idle gaps of 2, 3, 4 s inside a burst). Burst confirmed live 2026-10-16 01:17 on unit B: 9 items sent and 9 answered in one window of 9.5 s (more than twice the old 4.5 s budget), 0 left.
 - Assumption (accepted 2026-10-15, not testable): older units paired normally on an older hub because of different Zigbee 3.0 link-key handling; on the C-8 strict Zigbee 3.0 pairing is required.
 - Vendor documentation gives no recommended reporting configuration; the "3 years" battery claim is unverified under our defaults.
 
