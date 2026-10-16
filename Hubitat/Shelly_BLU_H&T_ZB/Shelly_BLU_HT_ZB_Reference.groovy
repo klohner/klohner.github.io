@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.7.0-burst'
+@Field static final String DRIVER_VERSION = '0.7.1-burst'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -877,17 +877,17 @@ private int everySeconds(Object v, int dflt) {
 private Map buildDesired(Map ov = null) {
     Map o = (ov != null) ? ov : ((testing() && state.testPrefs != null) ? (state.testPrefs as Map) : null)
     int tMin = clampInt(gp(o, 'tempMin'), CLAMP_TH_MIN_S, CLAMP_TH_MAX_S, 60)
-    int tEvery = everySeconds(gp(o, 'tempEvery'), 3600)
+    int tEvery = everySeconds(gp(o, 'tempEvery'), 900)
     boolean tOff = (tEvery == REPORTING_OFF_MAX_S)
     int tMax = tOff ? tEvery : Math.max(tMin, tEvery)          // never below min (the sensor answers 0x87)
     int tDelta = deltaRaw(gp(o, 'tempDelta'), CLAMP_TEMP_DELTA_MIN, CLAMP_TEMP_DELTA_MAX)
     int hMin = clampInt(gp(o, 'humMin'), CLAMP_TH_MIN_S, CLAMP_TH_MAX_S, 60)
-    int hEvery = everySeconds(gp(o, 'humEvery'), 3600)
+    int hEvery = everySeconds(gp(o, 'humEvery'), 900)
     boolean hOff = (hEvery == REPORTING_OFF_MAX_S)
     int hMax = hOff ? hEvery : Math.max(hMin, hEvery)
     int hDelta = deltaRaw(gp(o, 'humDelta'), CLAMP_HUM_DELTA_MIN, CLAMP_HUM_DELTA_MAX)
     int bMin = clampInt(gp(o, 'battMin'), CLAMP_BATT_MIN_S, CLAMP_BATT_MAX_S, 300)
-    int bEvery = everySeconds(gp(o, 'battEvery'), 3600)
+    int bEvery = everySeconds(gp(o, 'battEvery'), 1200)
     boolean bOff = (bEvery == REPORTING_OFF_MAX_S)
     int bMax = bOff ? bEvery : Math.max(bMin, bEvery)
     // max interval 0xFFFF removes the reporting entry on this sensor (= off, value only on Refresh)
@@ -1454,7 +1454,7 @@ private Map runEngineTests() {
         // E4 CR reply records the applied config, queues the read-back, releases the next bind
         feed(frame('0402', '07', '00'))
         Map ap = (((state.applied ?: [:]) as Map)['0402'] ?: [:]) as Map
-        check('E4 applied recorded unverified', ap.cfg == '60/3600/10' && ap.verified == false, ap.toString())
+        check('E4 applied recorded unverified', ap.cfg == '60/900/10' && ap.verified == false, ap.toString())
         check('E4 read-back queued', queue().any { Map i -> i.kind == 'rcr' && i.cluster == '0402' }, queue().toString())
         check('E4 next is humidity bind', txs().size() == 3 && txs()[2].toString().startsWith('bind|0405|'), txs().toString())
 
@@ -1463,9 +1463,9 @@ private Map runEngineTests() {
         queueVerify()
         feed(REPORT_T)
         check('E5 verify starts with rcr 0402', txs().size() == 1 && txs()[0].toString().startsWith('rcr|0402|'), txs().toString())
-        feed(frame('0402', '09', '00000000293C00100E0A00'))
+        feed(frame('0402', '09', '00000000293C0084030A00'))
         ap = (((state.applied ?: [:]) as Map)['0402'] ?: [:]) as Map
-        check('E5 verified', ap.verified == true && ap.cfg == '60/3600/10', ap.toString())
+        check('E5 verified', ap.verified == true && ap.cfg == '60/900/10', ap.toString())
         check('E5 next rcr 0405', txs().size() == 2 && txs()[1].toString().startsWith('rcr|0405|'), txs().toString())
 
         // E6 read-back mismatch re-queues the CR (bounded)
@@ -1483,7 +1483,7 @@ private Map runEngineTests() {
         check('E7 off desired', (d['0405'] as Map).max == 65535 && (d['0405'] as Map).off == true, d['0405'].toString())
         queueVerify()
         feed(REPORT_T)
-        feed(frame('0402', '09', '00000000293C00100E0A00'))
+        feed(frame('0402', '09', '00000000293C0084030A00'))
         feed(frame('0405', '09', '8B000000'))
         ap = (((state.applied ?: [:]) as Map)['0405'] ?: [:]) as Map
         check('E7 off verified by NOT_FOUND', ap.verified == true, ap.toString())
