@@ -26,7 +26,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.4.0'
+@Field static final String DRIVER_VERSION = '1.4.1'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
@@ -176,7 +176,8 @@ void healthCheck() {
     initState()
     long last = (state.lastRxAt ?: 0L) as long
     if (!last) return
-    int tMax = (state.tMax ?: 900) as int
+    if (state.tMax == null) return                         // not read back from the sensor yet (Refresh or Configure reads it)
+    int tMax = state.tMax as int
     if (tMax <= 0) return                                  // change-only or off: silence is expected
     long limit = Math.max(600000L, 3L * tMax * 1000L)
     if (now() - last > limit && state.health != 'offline') {

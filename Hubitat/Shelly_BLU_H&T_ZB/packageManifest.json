@@ -4,7 +4,7 @@
   "minimumHEVersion": "2.3.9",
   "dateReleased": "2026-10-16",
   "version": "1.0.0",
-  "releaseNotes": "First release. Simple driver 1.4.0 (temperature, humidity, battery, offline detection) and Reference driver 0.8.1 (full ZCL parser, reporting preferences, diagnostics). Pair in strict Zigbee 3.0 mode. Documentation: https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB",
+  "releaseNotes": "First release. Simple driver 1.4.1 (temperature, humidity, battery, offline detection) and Reference driver 0.8.1 (full ZCL parser, reporting preferences, diagnostics). Pair in strict Zigbee 3.0 mode. Documentation: https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB",
   "documentationLink": "https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB",
   "drivers": [
     {
@@ -13,7 +13,7 @@
       "namespace": "klohner",
       "location": "https://raw.githubusercontent.com/klohner/klohner.github.io/master/Hubitat/Shelly_BLU_H%26T_ZB/Shelly_BLU_HT_ZB_Simple.groovy",
       "required": true,
-      "version": "1.4.0"
+      "version": "1.4.1"
     },
     {
       "id": "69cbff97-1d2c-4429-bdad-373317fad746",
