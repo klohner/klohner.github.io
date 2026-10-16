@@ -13,7 +13,7 @@
  *  reporting_tests_2026-10-15_pm.md):
  *    - Pair with Hubitat "Pair using strict Zigbee 3.0 mode" + 5 button presses (normal pairing makes the sensor leave).
  *    - Every report the sensor sends opens a command window of >= 6.5 s: queue changes, send them right after a report.
- *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min and 1 hour max (battery: 300 s min, 12 hours max).
+ *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min and 15 min max (battery: 300 s min, 20 min max) = the factory intervals.
  *    - The sensor enforces no limits on reporting intervals, so this driver clamps them itself (CLAMP_* below).
  *    - Humidity can be switched off (max interval 0xFFFF removes the reporting entry) or throttled.
  *
@@ -36,7 +36,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.6.2-initialize'
+@Field static final String DRIVER_VERSION = '0.7.0-burst'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -56,11 +56,13 @@ import java.math.RoundingMode
 @Field static final int REPORTING_OFF_MAX_S = 0xFFFF  // ZCL: max interval 0xFFFF = stop reporting (entry removed on this sensor)
 
 // Queue engine timing (all measured on the sensor: every frame it sends opens a window >= 6.5 s, ~1 s per command, one at a time).
-@Field static final int SEND_BUDGET_MS   = 4500   // no new item is released later than this after a frame from the sensor (window is >= 6.5 s)
-@Field static final int MIN_SPACING_MS   = 900    // the sensor answers about one command per second
+@Field static final int SEND_BUDGET_MS   = 4500   // first release window after a frame the sensor started (it is awake for >= 6.5 s)
+@Field static final int ACK_EXTEND_MS    = 2000   // every answer proves the sensor is awake: the window stays open this long after it
+@Field static final int MAX_WINDOW_MS    = 30000  // safety cap for one window, however long the sensor keeps answering
+@Field static final int MIN_SPACING_MS   = 250    // next item goes out right after the answer (the answer itself takes 0.3-1 s)
 @Field static final int MAX_SENDS_PER_HOUR = 60   // hard stop against command storms (battery)
 @Field static final long REJOIN_COOLDOWN_MS = 600000L   // a full set is queued at most once per 10 min for NWK changes
-@Field static final int ITEM_TIMEOUT_MS  = 3000   // replies normally take 0.3-0.7 s
+@Field static final int ITEM_TIMEOUT_MS  = 2500   // no answer by then: pause the queue until the sensor's next report
 @Field static final int SETTLE_MS        = 250    // pause after a reply before the next item goes out
 @Field static final int MAX_ATTEMPTS     = 5      // sends per item before it is given up
 @Field static final int MAX_VERIFY_TRIES = 2      // re-sends of a Configure Reporting whose read-back differed
@@ -72,10 +74,10 @@ import java.math.RoundingMode
     '0001': [attr: '0021', type: 0x20, name: 'battery',     base: 30]])
 @Field static final Map CMD_ID = Collections.unmodifiableMap(['cr': '06', 'read': '00', 'rcr': '08'])   // ZCL command ids (for Default Response matching)
 
-// Defaults = a deliberate, battery-friendly setting (not the factory one).
-@Field static final Map DEFAULTS = Collections.unmodifiableMap([tempMin: 60, tempEvery: '3600', tempDelta: 0.10,
-                                    humMin: 60, humEvery: '3600', humDelta: 2.0,
-                                    battMin: 300, battEvery: '43200', tempOffset: 0, humOffset: 0,
+// Defaults = the sensor's factory intervals (temperature and humidity 15 min, battery 20 min) with calmer change thresholds than the factory 0.01.
+@Field static final Map DEFAULTS = Collections.unmodifiableMap([tempMin: 60, tempEvery: '900', tempDelta: 0.10,
+                                    humMin: 60, humEvery: '900', humDelta: 2.0,
+                                    battMin: 300, battEvery: '1200', tempOffset: 0, humOffset: 0,
                                     logEnable: false, traceEnable: false])
 
 // ZCL status codes (Configure Reporting / Read Reporting / Default Response / Read Attributes)
@@ -97,6 +99,7 @@ import java.math.RoundingMode
 
 // Explanation of the Commands, shown on the Preferences page.
 @Field static final String HELP_HTML = '<b>What the Commands do</b><br><span style="font-weight:normal">' +
+  '<b>Reporting defaults</b>: temperature and humidity at least every 15 minutes, battery at least every 20 minutes (the sensor\'s factory intervals, marked "(default)" in the menus), with a 0.1 \u00b0C / 2 %RH change threshold. Longer intervals save battery.<br>' +
   '<b>Configure</b>: binds the sensor to the hub and (re)sends all reporting settings, then reads them back. Use after pairing or when something looks wrong.<br>' +
   '<b>Refresh</b>: reads temperature, humidity and battery now. The sensor sleeps, so it is answered after its next report.<br>' +
   '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
@@ -143,11 +146,11 @@ metadata {
     preferences {
         input name: 'tempMin',   type: 'number',  title: 'Temperature: shortest time between reports (seconds, 30-3600)',  range: '30..3600', defaultValue: 60
         input name: 'tempDelta', type: 'decimal', title: 'Temperature: report when it changes by (\u00b0C, 0.05-5)',            defaultValue: 0.10
-        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
+        input name: 'tempEvery', type: 'enum',    title: 'Temperature: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
         input name: 'humMin',    type: 'number',  title: 'Humidity: shortest time between reports (seconds, 30-3600)',     range: '30..3600', defaultValue: 60
         input name: 'humDelta',  type: 'decimal', title: 'Humidity: report when it changes by (% RH, 0.5-20)',             defaultValue: 2.0
-        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour (recommended)', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '3600'
-        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours (recommended)', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '43200'
+        input name: 'humEvery',  type: 'enum',    title: 'Humidity: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes (default)', '1200': '20 minutes', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '900'
+        input name: 'battEvery', type: 'enum',    title: 'Battery: report at least every', options: ['60': '1 minute (not recommended)', '300': '5 minutes', '900': '15 minutes', '1200': '20 minutes (default)', '1800': '30 minutes', '3600': '1 hour', '10800': '3 hours', '21600': '6 hours', '43200': '12 hours', '64800': '18 hours', 'off': 'Off (value only on Refresh)'], defaultValue: '1200'
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'cmdHelp', type: 'hidden', title: HELP_HTML
@@ -294,7 +297,7 @@ private void onFrame(Map f) {
         }
         boolean matched = ackFrame(f)
         if (f.reply == true) {
-            if (matched && state.session) pumpSoon()
+            if (matched && state.session) keepWindowOpen()
         } else if (state.session || hasQueued()) {
             openSession(k)
         }
@@ -1023,6 +1026,18 @@ private void openSession(String trigger) {
     pump()
 }
 
+// The sensor just answered: it is demonstrably awake, so keep the window open and send the next item at once.
+private void keepWindowOpen() {
+    Map s = state.session as Map
+    if (s == null) return
+    long t = now()
+    if (t + ACK_EXTEND_MS > (s.budgetEnd as long)) {
+        s.budgetEnd = t + ACK_EXTEND_MS
+        state.session = s
+    }
+    pumpSoon()
+}
+
 void pumpTick() { pump() }
 
 private void pumpSoon() {
@@ -1043,7 +1058,7 @@ private void pump() {
     }
     if (q.any { Map i -> i.status == 'sent' }) return                      // one item at a time
     Map nxt = null
-    if (now() < (s.budgetEnd as long)) {
+    if (now() < Math.min(s.budgetEnd as long, (s.openedAt as long) + MAX_WINDOW_MS)) {
         List waiting = q.findAll { Map i -> i.status == 'queued' }
         waiting.sort { Map a, Map b -> ((a.prio as int) <=> (b.prio as int)) ?: ((a.id as int) <=> (b.id as int)) }
         nxt = waiting ? (waiting[0] as Map) : null

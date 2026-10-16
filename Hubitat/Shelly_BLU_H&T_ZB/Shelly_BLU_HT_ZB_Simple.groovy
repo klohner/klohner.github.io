@@ -7,8 +7,8 @@
  *  (only temperature/humidity offsets and debug logging).
  *  The sensor's current reporting settings are read back from it and shown as State Variables
  *  (temperatureReporting, humidityReporting, batteryReporting). The command "resetReportingToFactory" puts the sensor
- *  back to its factory reporting. A new or re-joined sensor is set once to this driver's battery-friendly reporting
- *  (temperature and humidity: at least every 1 hour; battery: every 12 hours). For custom reporting settings (intervals, change thresholds, off) switch the
+ *  back to its factory reporting (0.01 change). A new or re-joined sensor is set once to the factory intervals with calmer
+ *  change thresholds (temperature and humidity: at least every 15 minutes, 0.1 °C / 2 %RH; battery: every 20 minutes). For custom reporting settings (intervals, change thresholds, off) switch the
  *  device to the "Shelly BLU H&T ZB Reference" driver, set them there, then switch back.
  *
  *  PAIRING: Add Device > Zigbee > "Pair using strict Zigbee 3.0 mode" (normal pairing makes the sensor leave again),
@@ -24,16 +24,18 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.1.1-simple'
+@Field static final String DRIVER_VERSION = '1.2.0-simple'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
 // Queue engine timing (measured on the sensor: every frame it sends opens a window >= 6.5 s, ~1 s per command, one at a time).
-@Field static final int SEND_BUDGET_MS   = 4500
-@Field static final int MIN_SPACING_MS   = 900
+@Field static final int SEND_BUDGET_MS   = 4500   // first release window after a frame the sensor started (it is awake for >= 6.5 s)
+@Field static final int ACK_EXTEND_MS    = 2000   // every answer proves the sensor is awake: the window stays open this long after it
+@Field static final int MAX_WINDOW_MS    = 30000  // safety cap for one window, however long the sensor keeps answering
+@Field static final int MIN_SPACING_MS   = 250    // next item goes out right after the answer (the answer itself takes 0.3-1 s)
 @Field static final int MAX_SENDS_PER_HOUR = 60
 @Field static final long REJOIN_COOLDOWN_MS = 600000L
-@Field static final int ITEM_TIMEOUT_MS  = 3000
+@Field static final int ITEM_TIMEOUT_MS  = 2500   // no answer by then: pause the queue until the sensor's next report
 @Field static final int SETTLE_MS        = 250
 @Field static final int MAX_ATTEMPTS     = 5
 @Field static final int QUEUE_MAX        = 30
@@ -42,9 +44,9 @@ import java.math.RoundingMode
     '0402': [attr: '0000', type: 0x29, name: 'temperature', base: 10, key: 'temperatureReporting'],
     '0405': [attr: '0000', type: 0x21, name: 'humidity',    base: 20, key: 'humidityReporting'],
     '0001': [attr: '0021', type: 0x20, name: 'battery',     base: 30, key: 'batteryReporting']])
-// Applied once on a fresh pair / rejoin (a new join resets the sensor to factory reporting): battery-friendly, in raw units.
+// Applied once on a fresh pair / rejoin (a new join resets the sensor to factory reporting): factory intervals with calmer change thresholds, in raw units.
 @Field static final Map DEFAULT_REPORTING = Collections.unmodifiableMap([
-    '0402': [min: 60, max: 3600, delta: 10], '0405': [min: 60, max: 3600, delta: 200], '0001': [min: 300, max: 43200, delta: 1]])
+    '0402': [min: 60, max: 900, delta: 10], '0405': [min: 60, max: 900, delta: 200], '0001': [min: 300, max: 1200, delta: 1]])
 // factory reporting of the sensor (raw units: 0.01 degC, 0.01 %RH, 0.5 % battery)
 @Field static final Map FACTORY = Collections.unmodifiableMap([
     '0402': [min: 60, max: 900, delta: 1], '0405': [min: 60, max: 900, delta: 1], '0001': [min: 300, max: 1200, delta: 1]])
@@ -62,6 +64,16 @@ import java.math.RoundingMode
 @Field static final Map POWER_SOURCES = Collections.unmodifiableMap([0: 'Unknown', 1: 'Mains (single phase)', 2: 'Mains (3 phase)', 3: 'Battery',
     4: 'DC source', 5: 'Emergency mains (constantly powered)', 6: 'Emergency mains (with transfer switch)'])
 @Field static final Map BASIC_DATA = Collections.unmodifiableMap(['0000': 'zclVersion', '0007': 'powerSource', '4000': 'swBuildId'])
+
+// Explanation of the Commands, shown on the Preferences page.
+@Field static final String HELP_HTML = '<b>What the Commands do</b><br><span style="font-weight:normal">' +
+  '<b>Reporting</b>: this driver does not change the sensor\'s reporting. It reads what the sensor holds and shows it in the State Variables temperatureReporting, humidityReporting and batteryReporting. A new or re-paired sensor is set once to the defaults: temperature and humidity at least every 15 minutes (0.1 \u00b0C / 2 %RH change), battery at least every 20 minutes (the sensor\'s factory intervals). For other settings, switch the device to the Reference driver, set them there and switch back.<br>' +
+  '<b>Configure</b>: binds the sensor to the hub and reads back its reporting settings (does not change them). Use after pairing or when something looks wrong.<br>' +
+  '<b>Refresh</b>: reads temperature, humidity, battery and the reporting settings now. The sensor sleeps, so it is answered after its next report.<br>' +
+  '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
+  '<b>Initialize</b>: removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (leftovers from other drivers or older versions). The work queue is kept.<br>' +
+  '<b>Reset Reporting To Factory</b>: queues the sensor\'s factory reporting (temperature and humidity 60 s to 15 min or 0.01 change, battery 5 to 20 min).<br>' +
+  '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (at most about 15 minutes).</i></span>'
 
 metadata {
     definition(name: 'Shelly BLU H&T ZB', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true) {
@@ -91,6 +103,7 @@ metadata {
     }
 
     preferences {
+        input name: 'cmdHelp', type: 'hidden', title: HELP_HTML
         input name: 'tempOffset', type: 'decimal', title: 'Temperature offset (°C, applied by the hub)', defaultValue: 0
         input name: 'humOffset',  type: 'decimal', title: 'Humidity offset (% RH, applied by the hub)',   defaultValue: 0
         input name: 'logEnable', type: 'bool', title: 'Debug logging (turns itself off after 30 minutes)', defaultValue: false
@@ -180,7 +193,7 @@ private void onFrame(Map f) {
         if (f.kind == 'RCR_RSP') recordReporting(f)
         boolean matched = ackFrame(f)
         if (f.reply == true) {
-            if (matched && state.session) pumpSoon()
+            if (matched && state.session) keepWindowOpen()
         } else if (state.session || hasQueued()) {
             openSession(f.kind as String)
         }
@@ -568,7 +581,7 @@ private void queueSetup(String reason, boolean applyDefaults = false) {
         enqueue('rcr', cl, spec.attr as String, (spec.base as int) + 1)
     }
     queueReads(true)
-    logInfo "${reason}: ${((state.queue ?: []) as List).count { Map i -> i.status == 'queued' }} items queued${applyDefaults ? ' (including the battery-friendly reporting settings)' : ''}, sent after the next report from the sensor"
+    logInfo "${reason}: ${((state.queue ?: []) as List).count { Map i -> i.status == 'queued' }} items queued${applyDefaults ? ' (including the default reporting settings)' : ''}, sent after the next report from the sensor"
     publishStatus()
 }
 
@@ -625,6 +638,18 @@ private void openSession(String trigger) {
     pump()
 }
 
+// The sensor just answered: it is demonstrably awake, so keep the window open and send the next item at once.
+private void keepWindowOpen() {
+    Map s = state.session as Map
+    if (s == null) return
+    long t = now()
+    if (t + ACK_EXTEND_MS > (s.budgetEnd as long)) {
+        s.budgetEnd = t + ACK_EXTEND_MS
+        state.session = s
+    }
+    pumpSoon()
+}
+
 void pumpTick() { pump() }
 
 private void pumpSoon() {
@@ -644,7 +669,7 @@ private void pump() {
     }
     if (q.any { Map i -> i.status == 'sent' }) return                      // one item at a time
     Map nxt = null
-    if (now() < (s.budgetEnd as long)) {
+    if (now() < Math.min(s.budgetEnd as long, (s.openedAt as long) + MAX_WINDOW_MS)) {
         List waiting = q.findAll { Map i -> i.status == 'queued' }
         waiting.sort { Map a, Map b -> ((a.prio as int) <=> (b.prio as int)) ?: ((a.id as int) <=> (b.id as int)) }
         nxt = waiting ? (waiting[0] as Map) : null

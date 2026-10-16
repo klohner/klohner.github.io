@@ -43,7 +43,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.5.0-probe'
+@Field static final String DRIVER_VERSION = '0.5.1-probe'
 
 // ---- timing constants (sed_lifecycle.md parameter register) ----
 @Field static final long SEND_BUDGET_MS   = 12000L   // stop releasing new items this long after the session opened
@@ -998,7 +998,7 @@ private void publishCheckin(long t) {
     long last = ((state.lastCheckinEvent ?: 0) as long)
     if (t - last >= CHECKIN_THROTTLE_MS) {
         state.lastCheckinEvent = t
-        sendEvent(name: 'lastCheckin', value: stamp(t))
+        sendEvent(name: 'lastCheckin', value: new Date(t).format('yyyy-MM-dd HH:mm:ss', location.timeZone))
     }
 }
 
@@ -1158,7 +1158,7 @@ private void noteReport(long t) {
     state.lastReportAt = t
     state.reportCount = ((state.reportCount ?: 0) as int) + 1
     state.overdueWarned = false
-    sendEvent(name: 'lastReport', value: stamp(t))
+    sendEvent(name: 'lastReport', value: new Date(t).format('yyyy-MM-dd HH:mm:ss', location.timeZone))
 }
 
 void watchTick() {
