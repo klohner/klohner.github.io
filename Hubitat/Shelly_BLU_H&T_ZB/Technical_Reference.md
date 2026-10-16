@@ -1,6 +1,6 @@
 # Shelly BLU H&T ZB (SBHT-203C) — Technical Reference (D7)
 
-Version 1.0 · 2026-10-15 · covers Reference driver 0.7.0, Simple driver 1.2.0, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
+Version 1.0 · 2026-10-15 · covers Reference driver 0.7.1, Simple driver 1.2.0, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
 
 ## 1. The device
 - Battery Zigbee 3.0 sleepy end device (CR2032, vendor claim "3 years" with no stated conditions) with a Sensirion SHT40 sensor; also BLE/BTHome. Single endpoint 0x01, profile 0x0104 (HA), device id 0x0302.
@@ -33,7 +33,7 @@ Events: `temperature` (hub scale, offset applied), `humidity` (unit `%RH`, offse
 - Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 20, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Defaults (marked in the menu): 15 minutes for temperature and humidity, 20 minutes for battery. Longer intervals save battery; Shelly publishes no recommendation.
 
 ## 6. Drivers
-| | Reference 0.6.2 | Simple 1.1.1 |
+| | Reference 0.7.1 | Simple 1.2.0 |
 |---|---|---|
 | Purpose | everything, with diagnostics | temperature, humidity, battery |
 | Reporting | preferences (min, change, "at least every" menus) | none: accepts what the sensor holds; shown as State Variables `temperatureReporting`, `humidityReporting`, `batteryReporting` |
@@ -54,12 +54,12 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 - Window lengths have ±0.5 s granularity; first-boot behaviour cannot be repeated without a factory reset.
 - A late reply does not resume an already closed window; saving preferences drops a pending battery-pull verify.
 - Offline detection of the Reference driver is based on the temperature maximum interval and was not exercised live.
-- Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send one command about every 0.9 s with a 4.5 s send budget and never leave the sensor idle between items. Needs more samples (idle gaps of 2, 3, 4 s inside a burst).
+- Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send the next command 0.25 s after each answer and extend the window by 2 s per answer (cap 30 s). Needs more samples (idle gaps of 2, 3, 4 s inside a burst).
 - Assumption (accepted 2026-10-15, not testable): older units paired normally on an older hub because of different Zigbee 3.0 link-key handling; on the C-8 strict Zigbee 3.0 pairing is required.
 - Vendor documentation gives no recommended reporting configuration; the "3 years" battery claim is unverified under our defaults.
 
 ## 9. Changelog
 - Probe: frame capture and timing experiments.
-- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry.
+- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry. 0.7.1: self-test expectations updated (61/61 pass).
 - Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join. 1.2.0: burst queue, factory-interval defaults, commands help panel.
 - Probe 0.5.1: lastCheckin / lastReport use yyyy-MM-dd HH:mm:ss.
