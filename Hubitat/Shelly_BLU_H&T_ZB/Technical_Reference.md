@@ -1,6 +1,6 @@
 # Shelly BLU H&T ZB (SBHT-203C) — Technical Reference (D7)
 
-Version 1.0 · 2026-10-15 · covers Reference driver 0.8.1, Simple driver 1.3.1, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
+Version 1.0 · 2026-10-15 · covers Reference driver 0.8.1, Simple driver 1.4.1, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
 
 ## 1. The device
 - Battery Zigbee 3.0 sleepy end device (CR2032, vendor claim "3 years" with no stated conditions) with a Sensirion SHT40 sensor; also BLE/BTHome. Single endpoint 0x01, profile 0x0104 (HA), device id 0x0302.
@@ -33,12 +33,12 @@ Events: `temperature` (hub scale, offset applied), `humidity` (unit `%RH`, offse
 - Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 20, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Menu markers: "(default, factory)" = 15 minutes for temperature and humidity and 20 minutes for battery; "(recommended)" = 1 hour for temperature and humidity and 12 hours for battery. Longer intervals save battery; Shelly publishes no recommendation.
 
 ## 6. Drivers
-| | Reference 0.8.1 | Simple 1.3.1 |
+| | Reference 0.8.1 | Simple 1.4.1 |
 |---|---|---|
 | Purpose | everything, with diagnostics | temperature, humidity, battery |
 | Reporting | preferences (min, change, "at least every" menus) | none: accepts what the sensor holds; shown as State Variables `temperatureReporting`, `humidityReporting`, `batteryReporting` |
 | Commands | Configure, Refresh, Battery Replaced, Initialize, Clear Queue, Reset Reporting To Factory, Reset Reporting To Recommended, Self Test, Replay Frame | Configure, Refresh, Battery Replaced, Initialize, Reset Reporting To Factory, Reset Reporting To Recommended |
-| Extras | health check, lastCheckin, batteryVoltage, trace logging, 61 self-test checks, command help panel | offsets, debug logging |
+| Extras | health check, lastCheckin, batteryVoltage, trace logging, 61 self-test checks, command help panel | offsets, offline detection (healthStatus), debug logging |
 Both: offsets applied by the hub, Device Data standard of §1, queue engine of §4, Initialize (removes unused Current States, State Variables, Device Data and scheduled jobs; keeps the queue). To use non-standard reporting with the Simple driver: switch to the Reference driver, set it, switch back.
 The Probe driver logs every frame and runs the timing experiments; do not keep it installed next to the others for new pairings (they share fingerprints).
 
@@ -53,7 +53,7 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 - Findings come from two units (A: older logs; B: all live tests), one hub model (C-8, platform 2.5.2.135) and firmware 1.1.4/1.2.12; other firmware or parent topology can change timings.
 - Window lengths have ±0.5 s granularity; first-boot behaviour cannot be repeated without a factory reset.
 - A late reply does not resume an already closed window; saving preferences drops a pending battery-pull verify.
-- Offline detection of the Reference driver is based on the temperature maximum interval and was not exercised live.
+- Offline detection (both drivers) is based on the temperature maximum interval (silent for more than 3x, at least 10 minutes; the Simple driver reads the interval back first and checks nothing until it is known) and was not exercised live.
 - Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send the next command 0.25 s after each answer and extend the window by 2 s per answer (cap 30 s). Needs more samples (idle gaps of 2, 3, 4 s inside a burst). Burst confirmed live 2026-10-16 on unit B: 9 items sent and 9 answered in one window of 9.5 s (more than twice the old 4.5 s budget), 0 left; 6 of 6 in 6.4 s for Reset Reporting To Recommended. The listening window is considered measured well enough (project decision).
 - Assumption (accepted 2026-10-15, not testable): older units paired normally on an older hub because of different Zigbee 3.0 link-key handling; on the C-8 strict Zigbee 3.0 pairing is required.
 - Vendor documentation gives no recommended reporting configuration; the "3 years" battery claim is unverified under our defaults.
@@ -62,6 +62,7 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 - Probe: frame capture and timing experiments.
 - Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry. 0.7.1: self-test expectations updated (61/61 pass). 0.8.0: Reset Reporting To Recommended, (default, factory) / (recommended) menu markers, info log "queue window: N sent, M answered in X s".
 - Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join. 1.2.0: burst queue, factory-interval defaults, commands help panel. 1.3.0: Reset Reporting To Recommended, queue window summary log. Reference 0.8.1 / Simple 1.3.1: header comments rewritten, importUrl added, Probe marked as diagnostic tool (no functional change).
+- Simple 1.4.0 / 1.4.1: offline detection (healthStatus attribute, 15-minute check). Package: HPM manifest `packageManifest.json` and `repository.json` in the GitHub folder.
 - Probe 0.5.1: lastCheckin / lastReport use yyyy-MM-dd HH:mm:ss.
 
 ## 10. Reporting presets (Reference 0.8.0 / Simple 1.3.0)
