@@ -1,6 +1,6 @@
 # Shelly BLU H&T ZB (SBHT-203C) — Technical Reference (D7)
 
-Version 1.0 · 2026-10-15 · covers Reference driver 0.6.2, Simple driver 1.1.1, Probe driver. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
+Version 1.0 · 2026-10-15 · covers Reference driver 0.7.0, Simple driver 1.2.0, Probe driver 0.5.1. Detail and evidence live in `zigbee_protocol_spec.md`, `sed_lifecycle.md`, `design_queue_state.md`, `technical_knowledge_base.md` and the dated test reports; this page is the consolidated summary. Evidence grades: [V] verified on our units, [D] vendor/standard documentation, [C] community sources.
 
 ## 1. The device
 - Battery Zigbee 3.0 sleepy end device (CR2032, vendor claim "3 years" with no stated conditions) with a Sensirion SHT40 sensor; also BLE/BTHome. Single endpoint 0x01, profile 0x0104 (HA), device id 0x0302.
@@ -23,14 +23,14 @@ Events: `temperature` (hub scale, offset applied), `humidity` (unit `%RH`, offse
 
 ## 4. Sleepy-device command delivery
 - Every frame the sensor initiates (report, rejoin announce) opens a **command window of at least 6.5 s**; it answers about one command per second, one at a time. Outside a window commands are lost.
-- Both drivers therefore queue everything (bind, configure reporting, read reporting configuration, read attribute) and send it only inside a window: send budget 4.5 s, 0.9 s spacing, 3 s item timeout, 5 attempts, max 60 sends per hour, rejoin cooldown 10 min, queue limit 30. Replies are matched by content; items are replaced by key; a stale-item sweep recovers lost timers.
+- Both drivers therefore queue everything (bind, configure reporting, read reporting configuration, read attribute) and send it only inside a window, as a burst: one item at a time, the next goes out 0.25 s after the answer, every answer keeps the window open another 2 s (hard cap 30 s per window), and the first missing answer (2.5 s item timeout) pauses the queue until the sensor's next report. Other limits: 5 attempts per item, max 60 sends per hour, rejoin cooldown 10 min, queue limit 30. Replies are matched by content; items are replaced by key; a stale-item sweep recovers lost timers.
 - Settings changes take effect after the sensor's next report (at most its configured maximum interval). `configStatus` shows Pending / Working / Ready / Failed.
 
 ## 5. Reporting configuration
 - Factory: temperature and humidity min 60 s / max 900 s / change 0.01; battery 300 s / 1200 s / change 0.5 %.
-- Driver defaults (battery-friendly): temperature and humidity min 60 s, max 1 hour, change 0.1 °C / 2 %RH; battery min 300 s, max 12 hours, change 0.5 %. The Simple driver applies them only on a fresh pair or rejoin.
+- Driver defaults = the factory intervals with calmer change thresholds: temperature and humidity min 60 s, max 15 minutes, change 0.1 °C / 2 %RH; battery min 300 s, max 20 minutes, change 0.5 %. The Simple driver applies them only on a fresh pair or rejoin; "Reset Reporting To Factory" restores the exact factory values (change 0.01).
 - The sensor enforces no limits, so the Reference driver clamps (min 30–3600 s, max 60 s–18 h); max < min is rejected (0x87). Max interval 0xFFFF succeeds but removes the reporting entry (Read Reporting Configuration then answers 0x8B NOT_FOUND): reporting is off and the value only arrives on Refresh.
-- Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Battery default 12 hours, others 1 hour.
+- Reference driver menus ("report at least every"): 1 minute (not recommended), 5, 15, 20, 30 minutes, 1 hour, 3, 6, 12, 18 hours, Off. Defaults (marked in the menu): 15 minutes for temperature and humidity, 20 minutes for battery. Longer intervals save battery; Shelly publishes no recommendation.
 
 ## 6. Drivers
 | | Reference 0.6.2 | Simple 1.1.1 |
@@ -54,10 +54,12 @@ The Probe driver logs every frame and runs the timing experiments; do not keep i
 - Window lengths have ±0.5 s granularity; first-boot behaviour cannot be repeated without a factory reset.
 - A late reply does not resume an already closed window; saving preferences drops a pending battery-pull verify.
 - Offline detection of the Reference driver is based on the temperature maximum interval and was not exercised live.
-- The older-C-7 pairing hypothesis and the listening-window profile are untested.
+- Listening window: a lone read 4 s or 8 s after a report went unanswered (n = 1 each, +0.5 s and +2 s answered), while back-to-back commands one per second were answered up to +7.15 s. The window appears to be an idle timeout kept alive by activity, so the drivers send one command about every 0.9 s with a 4.5 s send budget and never leave the sensor idle between items. Needs more samples (idle gaps of 2, 3, 4 s inside a burst).
+- Assumption (accepted 2026-10-15, not testable): older units paired normally on an older hub because of different Zigbee 3.0 link-key handling; on the C-8 strict Zigbee 3.0 pairing is required.
 - Vendor documentation gives no recommended reporting configuration; the "3 years" battery claim is unverified under our defaults.
 
 ## 9. Changelog
 - Probe: frame capture and timing experiments.
-- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, 12 h battery default, command help panel.
-- Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join.
+- Reference 0.3.0: queue engine. 0.4.0: factory reset, battery replaced, health check. 0.5.0: "report at least every" menus. 0.6.x: Initialize, power source decoded, `%RH`, command help panel. 0.7.0: burst queue (answers keep the window open), factory-interval defaults, "(default)" markers, 20-minute menu entry.
+- Simple 1.0.0: first version. 1.1.x: offsets, Battery Replaced, Initialize, same Device Data, defaults on fresh join. 1.2.0: burst queue, factory-interval defaults, commands help panel.
+- Probe 0.5.1: lastCheckin / lastReport use yyyy-MM-dd HH:mm:ss.
