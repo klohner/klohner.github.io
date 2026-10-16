@@ -2,21 +2,23 @@
  *  Shelly BLU H&T ZB (SBHT-203C) - Simple driver
  *
  *  Temperature, humidity and battery for the Shelly BLU H&T ZB (battery-powered Zigbee sleepy end device).
+ *  Documentation, protocol notes and the Reference driver: https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB
  *
- *  This driver takes the sensor as it is configured: it has NO preferences for reporting intervals or change thresholds
- *  (only temperature/humidity offsets and debug logging).
- *  The sensor's current reporting settings are read back from it and shown as State Variables
- *  (temperatureReporting, humidityReporting, batteryReporting). The command "resetReportingToFactory" puts the sensor
- *  back to its factory reporting (0.01 change). A new or re-joined sensor is set once to the factory intervals with calmer
- *  change thresholds (temperature and humidity: at least every 15 minutes, 0.1 °C / 2 %RH; battery: every 20 minutes). For custom reporting settings (intervals, change thresholds, off) switch the
- *  device to the "Shelly BLU H&T ZB Reference" driver, set them there, then switch back.
+ *  This driver takes the sensor as it is configured: there are no reporting preferences (only temperature / humidity offsets and
+ *  debug logging). The sensor's reporting settings are read back and shown as State Variables (temperatureReporting,
+ *  humidityReporting, batteryReporting).
+ *    - A new or re-joined sensor is set once to the driver defaults: the factory intervals with calmer change thresholds
+ *      (temperature and humidity at least every 15 minutes, 0.1 C / 2 %RH; battery every 20 minutes).
+ *    - Commands "Reset Reporting To Factory" (0.01 change) and "Reset Reporting To Recommended" (temperature and humidity
+ *      1 hour, 0.1 C / 2 %RH; battery 12 hours, 2 %) put the sensor on either preset.
+ *    - For custom settings switch the device to the "Shelly BLU H&T ZB Reference" driver, set them there, then switch back.
  *
- *  PAIRING: Add Device > Zigbee > "Pair using strict Zigbee 3.0 mode" (normal pairing makes the sensor leave again),
+ *  PAIRING: Add Device > Zigbee > "Pair using strict Zigbee 3.0 mode" (normal pairing makes the sensor leave again on a C-8),
  *  then press the button 5 times quickly (LED flashes twice every 2 s for about a minute).
  *
- *  SLEEPY DEVICE: the sensor is only reachable right after it has sent something (a report or a rejoin announcement).
- *  Everything this driver sends to it (bindings, reads) is queued and goes out in the window after its next report.
- *  So: after Refresh or Configure, results appear after the sensor's next report, normally within 15 minutes.
+ *  SLEEPY DEVICE: the sensor accepts commands only for a few seconds after it has sent something (a report or a rejoin
+ *  announcement). Everything this driver sends to it (bindings, reads, reporting settings) is queued and goes out as a burst in
+ *  the window after its next report, so results appear after the sensor's next report (normally within 15 minutes).
  *
  *  Licensed under the Apache License, Version 2.0.
  */
@@ -24,7 +26,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.3.0-simple'
+@Field static final String DRIVER_VERSION = '1.3.1'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
@@ -80,7 +82,8 @@ import java.math.RoundingMode
   '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (at most about 15 minutes).</i></span>'
 
 metadata {
-    definition(name: 'Shelly BLU H&T ZB', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true) {
+    definition(name: 'Shelly BLU H&T ZB', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true,
+               importUrl: 'https://raw.githubusercontent.com/klohner/klohner.github.io/master/Hubitat/Shelly_BLU_H%26T_ZB/Shelly_BLU_HT_ZB_Simple.groovy') {
         capability 'Sensor'
         capability 'TemperatureMeasurement'
         capability 'RelativeHumidityMeasurement'

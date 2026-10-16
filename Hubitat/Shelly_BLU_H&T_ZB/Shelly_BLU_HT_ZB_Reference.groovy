@@ -1,34 +1,37 @@
 /**
  *  Shelly BLU H&T ZB (SBHT-203C) - Reference driver
  *
- *  STATUS: v0.5.0-everymenu: the 'report at least every' settings are drop-down menus (1 minute ... 18 hours, or off) for temperature,
- *  humidity and battery. v0.4.0-features (Plan step 4.4): adds resetReportingToFactory, health check (offline after 3x the temperature max interval),
- *  batteryReplaced date. Earlier: v0.3.0-queue (Plan step 4.3). Metadata, preferences, logging, state schema, Device Data standard (4.1), the
- *  complete frame PARSER (4.2) and the SLEEPY-DEVICE QUEUE ENGINE (4.3): configure()/updated()/refresh() queue items, a
- *  frame from the sensor opens a command window, items are sent one at a time, replies are matched by content, every
- *  reporting configuration is read back and verified. Still to come (4.4): offsets/units polish, health/offline check,
- *  resetReportingToFactory, factory-reset builder.
+ *  Full-featured driver for the battery-powered Zigbee sleepy end device Shelly BLU H&T ZB (temperature, humidity, battery).
+ *  Documentation, protocol notes and the Simple driver: https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB
  *
- *  Device facts this driver relies on (all verified on one unit, see zigbee_protocol_spec.md and
- *  reporting_tests_2026-10-15_pm.md):
- *    - Pair with Hubitat "Pair using strict Zigbee 3.0 mode" + 5 button presses (normal pairing makes the sensor leave).
- *    - Every report the sensor sends opens a command window of >= 6.5 s: queue changes, send them right after a report.
- *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 1 (0.5 %). Driver defaults: 60 s min and 15 min max (battery: 300 s min, 20 min max) = the factory intervals.
- *    - The sensor enforces no limits on reporting intervals, so this driver clamps them itself (CLAMP_* below).
- *    - Humidity can be switched off (max interval 0xFFFF removes the reporting entry) or throttled.
+ *  FEATURES
+ *    - Temperature, humidity (%RH) and battery (% and volts) with hub-side offsets.
+ *    - Complete ZCL / ZDO frame parser with Debug and Trace logging (every received frame, raw and decoded).
+ *    - Sleepy-device command queue: bindings, Configure Reporting, read-back verification and reads are queued and sent in a
+ *      burst right after the sensor's next report (one item at a time, each answer keeps the window open).
+ *    - Reporting preferences (shortest time, "report at least every" menus, change thresholds) with the presets
+ *      Factory, Default (= factory intervals, 0.1 C / 2 %RH) and Recommended (1 h / 1 h / 12 h) - see the Preferences page.
+ *    - Health check, Battery Replaced date, Initialize (cleans leftovers), Self Test and Replay Frame for developers.
  *
- *  Scaling: temperature int16 / 100 = degC (0x8000 = invalid); humidity uint16 / 100 = %RH (0xFFFF = invalid);
- *  battery percentage uint8 / 2 = % (0xFF = invalid); battery voltage uint8 * 0.1 V.
+ *  PAIRING: Add Device > Zigbee > "Pair using strict Zigbee 3.0 mode" (normal pairing makes the sensor leave again on a C-8),
+ *  then press the button 5 times quickly. No button press is needed afterwards: the sensor accepts commands for a few
+ *  seconds after each report, and this driver uses that window.
  *
- *  Device Data standard (user decision 2026-10-15): the platform sets manufacturer, model, application, endpointId.
- *  This driver adds ieee, swBuildId, zclVersion, powerSource and batteryType and never writes the duplicates
- *  mfrName / modelId / appVersion (legacy copies are removed in cleanLegacyData()).
+ *  DEVICE FACTS (see Technical_Reference.md)
+ *    - Factory reporting: temperature + humidity 60/900 s change 0.01, battery 300/1200 s change 0.5 %. Driver defaults: the same
+ *      intervals with 0.1 C / 2 %RH change thresholds.
+ *    - The sensor enforces no limits on reporting intervals, so this driver clamps them (CLAMP_* below).
+ *    - A maximum interval of 0xFFFF removes the reporting entry (reporting off, value only on Refresh).
+ *    - Scaling: temperature int16 / 100 = C (0x8000 invalid); humidity uint16 / 100 = %RH (0xFFFF invalid);
+ *      battery uint8 / 2 = % (0xFF invalid); battery voltage uint8 * 0.1 V.
+ *    - Device Data: the platform sets manufacturer, model, application, endpointId; this driver adds ieee, swBuildId, zclVersion,
+ *      powerSource (decoded, e.g. "Battery") and batteryType (CR2032).
  *
- *  Self test: the command selfTest feeds recorded and constructed frames through the real parser and checks the events
- *  and Device Data it would produce (nothing is sent to the device, nothing is published). Results go to the Logs.
+ *  INSTALL NOTE: this driver sends commands to the sensor. Do not keep the Probe driver installed next to it when pairing a
+ *  new unit (both match the same device).
  *
- *  INSTALL NOTE: this version sends commands to the sensor (binds, Configure Reporting, reads) after each of its reports.
- *  Do not pair a new unit while it is installed next to the Probe (both match the same device).
+ *  Version history: 0.3 queue engine, 0.4 factory reset / battery replaced / health check, 0.5 interval menus, 0.6 Initialize /
+ *  power source decoded / command help, 0.7 burst queue and factory-interval defaults, 0.8 Reset Reporting To Recommended.
  *
  *  Licensed under the Apache License, Version 2.0.
  */
@@ -36,7 +39,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '0.8.0-recommended'
+@Field static final String DRIVER_VERSION = '0.8.1'
 @Field static final String BATTERY_TYPE   = 'CR2032'
 @Field static final boolean QUEUE_IMPLEMENTED = true
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
@@ -112,7 +115,8 @@ import java.math.RoundingMode
   '<i>The sensor is asleep except right after it transmits, so anything sent to it goes out after its next report (normally within the "report at least every" time).</i></span>'
 
 metadata {
-    definition(name: 'Shelly BLU H&T ZB Reference', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true) {
+    definition(name: 'Shelly BLU H&T ZB Reference', namespace: 'klohner', author: 'Karl Lohner', singleThreaded: true,
+               importUrl: 'https://raw.githubusercontent.com/klohner/klohner.github.io/master/Hubitat/Shelly_BLU_H%26T_ZB/Shelly_BLU_HT_ZB_Reference.groovy') {
         capability 'Sensor'
         capability 'TemperatureMeasurement'
         capability 'RelativeHumidityMeasurement'
@@ -272,7 +276,7 @@ void debugOff() {
     logInfo 'debug and trace logging switched off'
 }
 
-// ------------------------------------------------------------------ parse (4.2)
+// ------------------------------------------------------------------ parse
 
 List parse(String description) {
     initState()
@@ -868,7 +872,7 @@ private List<Map> selfTestVectors() {
     ]
 }
 
-// ------------------------------------------------------------------ queue engine (4.3)
+// ------------------------------------------------------------------ queue engine
 // Everything sent to the sensor is a queue item. The sensor is asleep except right after it transmits (report, announce,
 // ...): that opens a COMMAND WINDOW of >= 6.5 s in which it answers about one command per second. So: queue now, send
 // only inside a window, one item at a time, match replies by content, retry in the next window.

@@ -1,6 +1,9 @@
 /**
  *  Shelly BLU H&T ZB (SBHT-203C) - Probe (diagnostic driver)
  *
+ *  DIAGNOSTIC TOOL used to develop the Reference and Simple drivers; most people do not need it. Its wake-up findings below
+ *  were superseded by strict Zigbee 3.0 pairing (see Technical_Reference.md).
+ *
  *  Purpose: measure and log what the sensor sends and accepts. It records every Zigbee frame (raw + decoded +
  *  timing) in a ring buffer and the hub log, publishes temperature / humidity / battery events (every frame,
  *  also when the value did not change), groups the sensor's frames into "rejoin runs", and flags frames that
