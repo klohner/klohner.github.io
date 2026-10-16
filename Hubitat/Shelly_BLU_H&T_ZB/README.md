@@ -1,12 +1,12 @@
 # Shelly BLU H&T ZB (SBHT-203C) – Hubitat drivers
 
-Work in progress. Drivers for the Shelly BLU H&T ZB, a battery-powered Zigbee sleepy end device (temperature, humidity, battery), tested on a Hubitat C-8 (2.5.2).
+Drivers for the Shelly BLU H&T ZB, a battery-powered Zigbee sleepy end device (temperature, humidity, battery), tested on a Hubitat C-8 (2.5.2).
 
 | File | Status | Purpose |
 |---|---|---|
-| `Shelly_BLU_HT_ZB_Simple.groovy` | testing | Simple driver: temperature, humidity, battery. No reporting preferences (it takes the sensor as configured and shows the sensor's reporting as State Variables); offsets, Battery Replaced, Initialize, Reset Reporting To Factory and Reset Reporting To Recommended |
-| `Shelly_BLU_HT_ZB_Reference.groovy` | testing | Full reference driver: parser, sleepy-device command queue, reporting menus ("report at least every"), offsets, health check, trace logging, Self Test, Replay Frame, Initialize |
-| `Shelly_BLU_HT_ZB_Probe.groovy` | working | Test driver that logs every Zigbee frame and runs timing/reporting experiments |
+| `Shelly_BLU_HT_ZB_Simple.groovy` | released | Simple driver: temperature, humidity, battery. No reporting preferences (it takes the sensor as configured and shows the sensor's reporting as State Variables); offsets, Battery Replaced, Initialize, offline detection (healthStatus), Reset Reporting To Factory and Reset Reporting To Recommended |
+| `Shelly_BLU_HT_ZB_Reference.groovy` | released | Full reference driver: parser, sleepy-device command queue, reporting menus ("report at least every"), offsets, health check, trace logging, Self Test, Replay Frame, Initialize |
+| `Shelly_BLU_HT_ZB_Probe.groovy` | diagnostic | Development tool (not needed for normal use, do not keep it installed when pairing): driver that logs every Zigbee frame and runs timing/reporting experiments |
 
 Default reporting set by the drivers: the sensor's factory intervals, temperature and humidity at least every 15 minutes (change 0.1 °C / 2 %RH, 60 s minimum) and battery at least every 20 minutes. Longer intervals (menus in the Reference driver) save battery; Shelly publishes no recommendation for its "3 years" claim. "Reset Reporting To Factory" restores the exact factory values; "Reset Reporting To Recommended" sets 1 hour for temperature and humidity (0.1 °C / 2 %RH change) and 12 hours for battery (2 % change).
 To use other reporting settings with the Simple driver, switch the device to the Reference driver, set them there, and switch back.
@@ -15,7 +15,9 @@ To use other reporting settings with the Simple driver, switch the device to the
 Use **Add Device → Zigbee → "Pair using strict Zigbee 3.0 mode"**, then press the button **5 times quickly** (LED flashes twice every 2 s for about a minute). Normal pairing makes the sensor leave again.
 
 ## Install on the hub from this repository
-Drivers Code → New Driver → Import, URL (Simple or Reference):
+**Hubitat Package Manager:** Install → Add a repository (or Search by Keyword/From a URL) with `https://raw.githubusercontent.com/klohner/klohner.github.io/master/Hubitat/Shelly_BLU_H%26T_ZB/repository.json`, then install "Shelly BLU H&T ZB Zigbee drivers" (the Reference driver is optional).
+
+**Manual:** Drivers Code → New Driver → Import, URL (Simple or Reference):
 
 `https://raw.githubusercontent.com/klohner/klohner.github.io/master/Hubitat/Shelly_BLU_H%26T_ZB/Shelly_BLU_HT_ZB_Simple.groovy`
 

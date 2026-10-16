@@ -5,7 +5,7 @@
  *  Documentation, protocol notes and the Reference driver: https://github.com/klohner/klohner.github.io/tree/master/Hubitat/Shelly_BLU_H%26T_ZB
  *
  *  This driver takes the sensor as it is configured: there are no reporting preferences (only temperature / humidity offsets and
- *  debug logging). The sensor's reporting settings are read back and shown as State Variables (temperatureReporting,
+ *  debug logging) and a healthStatus attribute (online / offline). The sensor's reporting settings are read back and shown as State Variables (temperatureReporting,
  *  humidityReporting, batteryReporting).
  *    - A new or re-joined sensor is set once to the driver defaults: the factory intervals with calmer change thresholds
  *      (temperature and humidity at least every 15 minutes, 0.1 C / 2 %RH; battery every 20 minutes).
@@ -26,7 +26,7 @@
 import groovy.transform.Field
 import java.math.RoundingMode
 
-@Field static final String DRIVER_VERSION = '1.3.1'
+@Field static final String DRIVER_VERSION = '1.4.0'
 @Field static final String BATTERY_TYPE = 'CR2032'
 @Field static final int  DEBUG_AUTO_OFF_SECONDS = 1800
 
@@ -73,6 +73,7 @@ import java.math.RoundingMode
 // Explanation of the Commands, shown on the Preferences page.
 @Field static final String HELP_HTML = '<b>What the Commands do</b><br><span style="font-weight:normal">' +
   '<b>Reporting</b>: this driver does not change the sensor\'s reporting. It reads what the sensor holds and shows it in the State Variables temperatureReporting, humidityReporting and batteryReporting. A new or re-paired sensor is set once to the defaults: temperature and humidity at least every 15 minutes (0.1 \u00b0C / 2 %RH change), battery at least every 20 minutes (the sensor\'s factory intervals). For other settings, switch the device to the Reference driver, set them there and switch back.<br>' +
+  '<b>Offline detection</b>: healthStatus shows online / offline. The sensor is marked offline when it has sent nothing for three times its temperature maximum interval (at least 10 minutes), for example with the battery out or out of range. It is online again with the next report.<br>' +
   '<b>Configure</b>: binds the sensor to the hub and reads back its reporting settings (does not change them). Use after pairing or when something looks wrong.<br>' +
   '<b>Refresh</b>: reads temperature, humidity, battery and the reporting settings now. The sensor sleeps, so it is answered after its next report.<br>' +
   '<b>Battery Replaced</b>: records today as the battery change date (batteryLastReplaced).<br>' +
@@ -94,6 +95,7 @@ metadata {
         attribute 'configStatus', 'string'
         attribute 'batteryLastReplaced', 'string'   // set by the batteryReplaced command
 
+        attribute 'healthStatus', 'string'      // online / offline / unknown
         command 'resetReportingToFactory'
         command 'resetReportingToRecommended'
         command 'batteryReplaced'
@@ -168,7 +170,33 @@ private void queueReportingSet(Map set, String what) {
     publishStatus()
 }
 
-void healthCheck() { unschedule('healthCheck') }      // left over from the Reference driver's schedule after a driver switch
+// Offline detection: the sensor reports at least every "max interval" (read back into state.tMax), so silence for more than three
+// times that (at least 10 minutes) means it is offline (battery out, out of range). Not checked when temperature reporting is off.
+void healthCheck() {
+    initState()
+    long last = (state.lastRxAt ?: 0L) as long
+    if (!last) return
+    int tMax = (state.tMax ?: 900) as int
+    if (tMax <= 0) return                                  // change-only or off: silence is expected
+    long limit = Math.max(600000L, 3L * tMax * 1000L)
+    if (now() - last > limit && state.health != 'offline') {
+        state.health = 'offline'
+        sendEvent(name: 'healthStatus', value: 'offline', descriptionText: "${device.displayName} is offline (silent for more than ${(int) (limit / 60000L)} min)".toString())
+        log.warn "${device.displayName}: no frame from the sensor for more than ${(int) (limit / 60000L)} min: marked offline"
+    }
+}
+
+private void markOnline() {
+    if (state.health != 'online') {
+        state.health = 'online'
+        sendEvent(name: 'healthStatus', value: 'online', descriptionText: "${device.displayName} is online".toString())
+    }
+}
+
+private void scheduleHealth() {
+    runEvery15Minutes('healthCheck')
+    state.healthSched = DRIVER_VERSION
+}
 
 void batteryReplaced() {
     String d = new Date().format('yyyy-MM-dd', location.timeZone)
@@ -185,6 +213,8 @@ void debugOff() {
 
 List parse(String description) {
     initState()
+    state.lastRxAt = now()                  // one small write per frame
+    markOnline()
     Map f = decodeFrame(description)
     logDebug "RX ${f.kind} ${description} => ${f.decoded}"
     onFrame(f)
@@ -547,6 +577,10 @@ private void recordReporting(Map f) {
     if (spec == null) return
     Map e = ((f.rcr ?: []) as List).find { Map r -> r.attr == hex4(spec.attr) } as Map
     if (e == null) return
+    if (f.cluster == '0402') {
+        int mx = (e.status == '00') ? (e.max as int) : 0
+        state.tMax = (mx == 0xFFFF) ? 0 : mx
+    }
     String txt = describeReporting(f.cluster as String, e)
     if (state[spec.key as String] != txt) {
         state[spec.key as String] = txt
@@ -930,16 +964,18 @@ private void initState() {
         state.session     = null      // open command window: id, trigger, openedAt, budgetEnd, sent, acked
         state.failed      = []
         state.nwk         = device.deviceNetworkId
-        for (String a in ['healthStatus', 'lastCheckin', 'batteryVoltage']) {      // attributes of the Reference driver
+        state.health      = 'unknown'
+        for (String a in ['lastCheckin', 'batteryVoltage']) {      // attributes of the Reference driver
             try { device.deleteCurrentState(a) } catch (Exception e) { /* not present */ }
         }
     }
+    if (state.healthSched != DRIVER_VERSION) scheduleHealth()      // also covers installs that predate the health check
 }
 
 
 // ------------------------------------------------------------------ Initialize: remove everything this driver does not use
-@Field static final List USED_ATTRIBUTES = ['temperature', 'humidity', 'battery', 'configStatus', 'batteryLastReplaced']
-@Field static final List USED_STATE = ['drv', 'needsConfig', 'queue', 'nextId', 'gen', 'sid', 'session', 'failed', 'nwk', 'lastParseWarnAt', 'lastRejoinAt', 'lastVerifyQueueAt', 'sendHour', 'temperatureReporting', 'humidityReporting', 'batteryReporting']
+@Field static final List USED_ATTRIBUTES = ['temperature', 'humidity', 'battery', 'configStatus', 'batteryLastReplaced', 'healthStatus']
+@Field static final List USED_STATE = ['drv', 'needsConfig', 'queue', 'nextId', 'gen', 'sid', 'session', 'failed', 'nwk', 'lastParseWarnAt', 'lastRejoinAt', 'lastVerifyQueueAt', 'sendHour', 'lastRxAt', 'health', 'healthSched', 'tMax', 'temperatureReporting', 'humidityReporting', 'batteryReporting']
 @Field static final List USED_DATA = ['manufacturer', 'model', 'application', 'endpointId', 'ieee', 'swBuildId', 'zclVersion', 'powerSource', 'batteryType', 'inClusters', 'outClusters']
 
 // Removes Current States, State Variables, Device Data and scheduled jobs that this driver does not use (left over from other
@@ -967,6 +1003,7 @@ void initialize() {
     Map inFlight = ((state.queue ?: []) as List).find { Map i -> i.status == 'sent' } as Map      // keep the queue's own timers alive
     if (inFlight != null) runInMillis(ITEM_TIMEOUT_MS, 'itemTimeout', [overwrite: true, data: [id: inFlight.id]])
     else if (state.session) pumpSoon()
+    scheduleHealth()
     if (settings?.logEnable) runIn(DEBUG_AUTO_OFF_SECONDS, 'debugOff')
     logInfo "initialize: removed ${gone ? gone.join(', ') : 'nothing'}; scheduled jobs reset"
 }
