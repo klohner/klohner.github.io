@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Train times</title>
+<style>
+  :root {
+    --page: #000;          /* darkest background: shows between rows */
+    --row: #2b2d33;        /* countdown row panel */
+    --num: #9ea1a9;        /* MIN labels */
+    --ink: #ffffff;
+    --muted: #b9bcc4;
+    --u: 90px;            /* one train row's height; every row size scales from it (set by script) */
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--page); color: var(--ink); font-family: Roboto, Arial, Helvetica, sans-serif; overflow: hidden; }
+  .screen { height: 100%; width: 100%; display: flex; flex-direction: column; padding: 2.2vh 2.4vw; }
+
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.8vh; }
+  header .station { font-size: 4.2vh; font-weight: 700; letter-spacing: .02em; }
+  header .station small { display: block; font-size: 2.1vh; font-weight: 400; color: var(--muted); }
+  header .clock { font-size: 4.4vh; font-variant-numeric: tabular-nums; font-weight: 400; }
+  header .clock .hm { font-weight: 700; }
+  header .clock .s { font-weight: 400; }
+
+  .board { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  .train { flex: 1 1 0; min-height: 0; display: flex; align-items: center; }
+  .train + .train { margin-top: 0.9vh; }
+  .card {
+    flex: 1 1 auto; min-width: 0; height: 100%;
+    display: flex; align-items: center;
+    background: var(--row); padding: 0 2vw 0 1.6vw;
+  }
+  .bullet {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; margin-right: calc(var(--u) * 0.2);
+    width: calc(var(--u) * 0.62); height: calc(var(--u) * 0.62); border-radius: 50%; background: #808183; color: #fff;
+    font-weight: 700; font-size: calc(var(--u) * 0.34);
+  }
+  .dest { flex: 1 1 auto; min-width: 0; align-self: stretch; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
+  .dest .name { font-size: calc(var(--u) * 0.368); font-weight: 700; line-height: 1.05; white-space: nowrap; }
+  .dest .sub { font-size: calc(var(--u) * 0.23); color: var(--ink); margin-top: calc(var(--u) * 0.02); line-height: 1.15; white-space: nowrap; }
+  .eta { flex: 0 0 auto; text-align: right; margin-left: calc(var(--u) * 0.25); }
+  .eta .mins { font-size: calc(var(--u) * 0.46); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .eta .unit { font-size: calc(var(--u) * 0.14); font-weight: 700; color: var(--num); letter-spacing: .08em; }
+  .empty { padding: 2vh; color: var(--muted); font-size: 2.6vh; }
+
+  .status { flex: 0 0 auto; max-height: 24vh; overflow: hidden; margin-top: 1.8vh; border-top: 1px solid #222; padding-top: 1.4vh; }
+  .status h2 { margin: 0 0 1vh; font-size: 3vh; font-weight: 700; }
+  .status .item { display: flex; align-items: flex-start; margin-bottom: 1vh; }
+  .status .item .bullet { width: 4.2vh; height: 4.2vh; font-size: 2.4vh; margin-right: 1.2vw; }
+  .status .item .text { font-size: 2.3vh; line-height: 1.3; }
+  .status .item .text b { display: block; font-size: 2.6vh; }
+  .status .ok { font-size: 2.4vh; color: var(--muted); }
+  .footer { flex: 0 0 auto; display: flex; justify-content: space-between; font-size: 1.8vh; color: var(--muted); margin-top: 0.8vh; }
+</style>
+</head>
+<body>
+<div class="screen">
+  <header>
+    <div class="station">
+      <span id="station">Loading…</span>
+      <small id="subtitle"></small>
+    </div>
+    <div class="clock" id="clock"><span class="hm">--:--</span><span class="s">:--</span></div>
+  </header>
+
+  <section class="board" id="board">
+    <div class="empty">Loading trains…</div>
+  </section>
+
+  <section class="status">
+    <h2>Happening now</h2>
+    <div id="alerts"><div class="ok">Checking line status…</div></div>
+  </section>
+
+  <div class="footer">
+    <span id="updated"></span>
+    <span>Data: MTA via realtimerail.nyc</span>
+  </div>
+</div>
+
+<script>
+  // Settings come from the URL. Examples:
+  //   index.html                                    Penn Station (34 St), uptown 1 train (defaults)
+  //   index.html?stop=116&direction=S               125 St, downtown
+  //   index.html?stop=116S                          a directional stop ID also works
+  //   index.html?stop=631&direction=N&route=6&count=4&label=Uptown
+  // stop       stop ID, with or without an N/S suffix (default 128, Penn Station)
+  // direction  N or S, used when the stop has no suffix (default N)
+  // route      line(s) to show, e.g. route=1 or route=1,2,3 or route=1&route=2 (default 1)
+  //            trains from all listed lines are merged and sorted by time
+  // count      how many trains to show, 1 to 10 (default 7)
+  // label      direction name under the station name (default from direction)
+  // Data comes from the public Transiter API that realtimerail.nyc uses; it allows any origin.
+  const params = new URLSearchParams(window.location.search);
+  const DIRECTION = (params.get("direction") || "N").toUpperCase() === "S" ? "S" : "N";
+  const RAW_STOP = (params.get("stop") || "128").toUpperCase();
+  const STOP_ID = /[NS]$/.test(RAW_STOP) ? RAW_STOP : RAW_STOP + DIRECTION;
+  // route can repeat (route=1&route=2) or list commas (route=1,2,3); trains from all of them are merged.
+  const ROUTES = params.getAll("route").join(",").split(",")
+    .map(r => r.trim().toUpperCase()).filter(r => r);
+  if (ROUTES.length === 0) ROUTES.push("1");
+  const COUNT = Math.min(10, Math.max(1, parseInt(params.get("count"), 10) || 7));
+  const LABEL = params.get("label") || (DIRECTION === "N" ? "Uptown" : "Downtown");
+
+  const BASE = "https://realtimerail.nyc/transiter/v0.6/systems/us-ny-subway";
+  const STOP_URL = BASE + "/stops/" + encodeURIComponent(STOP_ID);
+  const REFRESH_MS = 30000;
+
+  // Bullet colours by line (MTA colours). Unknown lines fall back to grey.
+  const LINE_COLORS = {
+    "1": "#d9222a", "2": "#d9222a", "3": "#d9222a",
+    "4": "#00933c", "5": "#00933c", "6": "#00933c",
+    "7": "#b933ad",
+    "A": "#2850ad", "C": "#2850ad", "E": "#2850ad",
+    "B": "#ff6319", "D": "#ff6319", "F": "#ff6319", "M": "#ff6319",
+    "G": "#6cbe45",
+    "J": "#996633", "Z": "#996633",
+    "L": "#a7a9ac",
+    "N": "#fccc0a", "Q": "#fccc0a", "R": "#fccc0a", "W": "#fccc0a",
+    "S": "#808183", "SI": "#2850ad"
+  };
+  function lineColor(id) { return LINE_COLORS[String(id).toUpperCase()] || "#808183"; }
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+
+  function tickClock() {
+    const d = new Date();
+    const hour12 = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12;   // 12-hour, no AM/PM
+    document.querySelector("#clock .hm").textContent = hour12 + ":" + pad(d.getMinutes());
+    document.querySelector("#clock .s").textContent = ":" + pad(d.getSeconds());
+  }
+
+  function minutesUntil(epochSeconds) {
+    return Math.round((epochSeconds - Date.now() / 1000) / 60);
+  }
+
+  function escapeText(s) {
+    const div = document.createElement("div");
+    div.textContent = s == null ? "" : String(s);
+    return div.innerHTML;
+  }
+
+  // Every row size scales from --u (one row's height), so the layout holds for any row count.
+  // The direction name is 1.6x the terminal text. If either is too wide for its row, both shrink
+  // together (the factor s) so the ratio holds.
+  const NAME_RATIO = 1.6, SCALE_MAX = 1.0, SCALE_MIN = 0.4;
+  function setScale(name, sub, s) {
+    sub.style.fontSize = "calc(var(--u) * 0.23 * " + s + ")";
+    name.style.fontSize = "calc(var(--u) * 0.23 * " + (s * NAME_RATIO) + ")";
+  }
+  function fitRow(dest) {
+    const name = dest.querySelector(".name");
+    const sub = dest.querySelector(".sub");
+    let s = SCALE_MAX;
+    setScale(name, sub, s);
+    while ((dest.scrollHeight > dest.clientHeight + 1 || dest.scrollWidth > dest.clientWidth + 1) && s > SCALE_MIN) {
+      s -= 0.02;
+      setScale(name, sub, s);
+    }
+  }
+  function fitAll() {
+    document.querySelectorAll("#board .dest").forEach(fitRow);
+  }
+  // Measure one row and publish its height as --u, then fit the text inside it.
+  function sizeRows() {
+    const card = document.querySelector("#board .card");
+    if (card) document.documentElement.style.setProperty("--u", card.clientHeight + "px");
+    fitAll();
+  }
+  window.addEventListener("resize", sizeRows);
+
+  function renderTrains(trains) {
+    const board = document.getElementById("board");
+    board.textContent = "";
+    if (trains.length === 0) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "No trains scheduled right now.";
+      board.appendChild(e);
+      return;
+    }
+    for (const t of trains) {
+      const row = document.createElement("div");
+      row.className = "train";
+      const minsHtml = t.mins < 1
+        ? '<div class="mins">Now</div>'
+        : '<div class="mins">' + t.mins + '</div><div class="unit">MIN</div>';
+      row.innerHTML =
+        '<div class="card">' +
+          '<span class="bullet" style="background:' + lineColor(t.route) + '">' + escapeText(t.route) + '</span>' +
+          '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
+          '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
+          '<div class="eta">' + minsHtml + '</div>' +
+        '</div>';
+      board.appendChild(row);
+    }
+    sizeRows();
+  }
+
+  function renderAlerts(alerts) {
+    const box = document.getElementById("alerts");
+    box.textContent = "";
+    if (alerts.length === 0) {
+      const ok = document.createElement("div");
+      ok.className = "ok";
+      ok.textContent = ROUTES.join(", ") + (ROUTES.length > 1 ? " lines: service running normally." : " line: service running normally.");
+      box.appendChild(ok);
+      return;
+    }
+    for (const a of alerts.slice(0, 2)) {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML =
+        '<span class="bullet" style="background:' + lineColor(a.route) + '">' + escapeText(a.route) + '</span>' +
+        '<div class="text"><b>' + escapeText(a.header) + '</b>' + escapeText(a.description) + '</div>';
+      box.appendChild(item);
+    }
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }
+
+  async function refreshTrains() {
+    try {
+      const data = await getJson(STOP_URL);
+      document.getElementById("station").textContent = data.name || STOP_ID;
+      document.getElementById("subtitle").textContent = LABEL;
+      const now = Date.now() / 1000;
+      const trains = (data.stopTimes || [])
+        .map(s => ({
+          epoch: Number((s.arrival && s.arrival.time) || (s.departure && s.departure.time)),
+          route: s.trip.route.id,
+          direction: s.headsign || LABEL,
+          destination: (s.destination && s.destination.name) || ""
+        }))
+        .filter(t => t.epoch && t.epoch >= now - 30)
+        .filter(t => ROUTES.includes(t.route.toUpperCase()))
+        .sort((a, b) => a.epoch - b.epoch)
+        .slice(0, COUNT)
+        .map(t => ({ ...t, mins: minutesUntil(t.epoch) }));
+      renderTrains(trains);
+      document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch (err) {
+      document.getElementById("updated").textContent = "Train data unavailable (" + err.message + ")";
+    }
+  }
+
+  async function refreshAlerts() {
+    try {
+      // Fetch alerts for every line; a failed line is skipped rather than hiding the others.
+      // The route lists only alert IDs; the header and description come from each alert.
+      const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
+      const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+      const results = await Promise.all(ROUTES.map(r =>
+        getJson(BASE + "/routes/" + encodeURIComponent(r))
+          .then(route => Promise.all((route.alerts || []).slice(0, 3).map(a =>
+            getJson(BASE + "/alerts/" + encodeURIComponent(a.id))
+              .then(d => ({ route: r, header: plainText(englishText(d.header)), description: plainText(englishText(d.description)).slice(0, 200) }))
+              .catch(() => null)
+          )))
+          .then(list => list.filter(x => x))
+          .catch(() => [])
+      ));
+      renderAlerts([].concat(...results));
+    } catch (err) {
+      const box = document.getElementById("alerts");
+      box.textContent = "";
+      const e = document.createElement("div");
+      e.className = "ok";
+      e.textContent = "Line status unavailable.";
+      box.appendChild(e);
+    }
+  }
+
+  function refreshAll() {
+    refreshTrains();
+    refreshAlerts();
+  }
+
+  tickClock();
+  setInterval(tickClock, 1000);
+  refreshAll();
+  setInterval(refreshAll, REFRESH_MS);
+</script>
+</body>
+</html>
