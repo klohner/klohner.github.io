@@ -24,9 +24,8 @@
   header .clock .hm { font-weight: 700; }
   header .clock .s { font-weight: 400; }
 
-  .board { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-  .train { flex: 1 1 0; min-height: 0; display: flex; align-items: center; }
-  .train + .train { margin-top: 0.9vh; }
+  .board { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .train { flex: 0 0 auto; display: flex; align-items: center; }
   .card {
     flex: 1 1 auto; min-width: 0; height: 100%;
     display: flex; align-items: center;
@@ -45,12 +44,17 @@
   .eta .unit { font-size: calc(var(--u) * 0.14); font-weight: 700; color: var(--num); letter-spacing: .08em; }
   .empty { padding: 2vh; color: var(--muted); font-size: 2.6vh; }
 
-  .status { flex: 0 0 auto; max-height: 24vh; overflow: hidden; margin-top: 1.8vh; border-top: 1px solid #222; padding-top: 1.4vh; }
+  .status { flex: 0 0 auto; margin-top: 1.8vh; border-top: 1px solid #222; padding-top: 1.4vh; }
   .status h2 { margin: 0 0 1vh; font-size: 3vh; font-weight: 700; }
   .status .item { display: flex; align-items: flex-start; margin-bottom: 1vh; }
+  .status .item[hidden] { display: none; }
   .status .item .bullet { width: 4.2vh; height: 4.2vh; font-size: 2.4vh; margin-right: 1.2vw; }
   .status .item .text { font-size: 2.3vh; line-height: 1.3; }
-  .status .item .text b { display: block; font-size: 2.6vh; }
+  .status .item .text b { display: block; font-size: calc(2.6vh * var(--title-scale, 1)); }
+  .status .item .text .d { font-size: calc(2.3vh * var(--desc-scale, 1)); }
+  .status .item .text .d.off { display: none; }
+  .status .item .text .lines { font-size: 2vh; color: var(--muted); }
+  .status .more { font-size: 2vh; color: var(--muted); margin-top: 0.6vh; }
   .status .ok { font-size: 2.4vh; color: var(--muted); }
   .footer { flex: 0 0 auto; display: flex; justify-content: space-between; font-size: 1.8vh; color: var(--muted); margin-top: 0.8vh; }
 </style>
@@ -163,60 +167,164 @@
   function fitAll() {
     document.querySelectorAll("#board .dest").forEach(fitRow);
   }
-  // Measure one row and publish its height as --u, then fit the text inside it.
-  function sizeRows() {
-    const card = document.querySelector("#board .card");
-    if (card) document.documentElement.style.setProperty("--u", card.clientHeight + "px");
-    fitAll();
-  }
-  window.addEventListener("resize", sizeRows);
+  // Layout. Seven rows at the normal one-line status set the row height, and no row grows past it.
+  // Alerts come first: the status box takes the height its alerts need, and rows give up space to
+  // it, down to MIN_ROWS rows. Only when no alerts need the room do rows shrink to show a larger count.
+  const REF_ROWS = 7, MIN_ROWS = 2, GAP_RATIO = 0.1;
+  let trainList = null;      // null until the first train refresh; "error", or an array of trains
+  let alertList = null;      // null until the first alert refresh; an array of alerts
+  let alertFailed = [];      // lines whose status could not be fetched
 
-  function renderTrains(trains) {
+  function showBoardMessage(text) {
     const board = document.getElementById("board");
     board.textContent = "";
-    if (trains.length === 0) {
-      const e = document.createElement("div");
-      e.className = "empty";
-      e.textContent = "No trains scheduled right now.";
-      board.appendChild(e);
-      return;
-    }
-    for (const t of trains) {
-      const row = document.createElement("div");
-      row.className = "train";
-      const minsHtml = t.mins < 1
-        ? '<div class="mins">Now</div>'
-        : '<div class="mins">' + t.mins + '</div><div class="unit">MIN</div>';
-      row.innerHTML =
-        '<div class="card">' +
-          '<span class="bullet" style="background:' + lineColor(t.route) + '">' + escapeText(t.route) + '</span>' +
-          '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
-          '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
-          '<div class="eta">' + minsHtml + '</div>' +
-        '</div>';
-      board.appendChild(row);
-    }
-    sizeRows();
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = text;
+    board.appendChild(e);
   }
 
-  function renderAlerts(alerts) {
+  function trainRow(t, height, gap) {
+    const row = document.createElement("div");
+    row.className = "train";
+    row.style.height = height + "px";
+    row.style.marginTop = gap + "px";
+    const minsHtml = t.mins < 1
+      ? '<div class="mins">Now</div>'
+      : '<div class="mins">' + t.mins + '</div><div class="unit">MIN</div>';
+    row.innerHTML =
+      '<div class="card">' +
+        '<span class="bullet" style="background:' + lineColor(t.route) + '">' + escapeText(t.route) + '</span>' +
+        '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
+        '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
+        '<div class="eta">' + minsHtml + '</div>' +
+      '</div>';
+    return row;
+  }
+
+  function layout() {
+    const board = document.getElementById("board");
+    // Seven rows fill the board when the status is one line, so measure it that way.
+    renderAlerts([], []);
+    const slot = board.clientHeight / (REF_ROWS + (REF_ROWS - 1) * GAP_RATIO);
+    renderAlerts(alertList, alertFailed);
+    fitAlerts(alertBudget(slot));
+
+    if (trainList === null) return;
+    if (trainList === "error") return showBoardMessage("Train times unavailable right now.");
+    if (trainList.length === 0) return showBoardMessage("No trains scheduled right now.");
+
+    const gap = slot * GAP_RATIO;
+    const avail = board.clientHeight;
+    const expanded = alertList !== null && (alertList.length > 0 || alertFailed.length > 0);
+    let n = trainList.length;
+    if (expanded) {
+      const fit = Math.floor((avail + gap) / (slot + gap));
+      n = Math.min(trainList.length, Math.max(fit, Math.min(MIN_ROWS, trainList.length)));
+    }
+    const rowH = Math.max(0, n * slot + (n - 1) * gap <= avail ? slot : (avail - (n - 1) * gap) / n);
+    document.documentElement.style.setProperty("--u", rowH + "px");
+    board.textContent = "";
+    trainList.slice(0, n).forEach((t, i) => board.appendChild(trainRow(t, rowH, i > 0 ? gap : 0)));
+    fitAll();
+  }
+  window.addEventListener("resize", layout);
+
+  // failed lists the lines whose status could not be fetched; those are never reported as normal.
+  function renderAlerts(alerts, failed) {
     const box = document.getElementById("alerts");
     box.textContent = "";
-    if (alerts.length === 0) {
+    box.style.removeProperty("--desc-scale");
+    box.style.removeProperty("--title-scale");
+    if (alerts === null) {
+      const checking = document.createElement("div");
+      checking.className = "ok";
+      checking.textContent = "Checking line status…";
+      box.appendChild(checking);
+      return;
+    }
+    if (alerts.length === 0 && failed.length === 0) {
       const ok = document.createElement("div");
       ok.className = "ok";
       ok.textContent = ROUTES.join(", ") + (ROUTES.length > 1 ? " lines: service running normally." : " line: service running normally.");
       box.appendChild(ok);
       return;
     }
-    for (const a of alerts.slice(0, 2)) {
+    for (const a of alerts) {
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML =
         '<span class="bullet" style="background:' + lineColor(a.route) + '">' + escapeText(a.route) + '</span>' +
-        '<div class="text"><b>' + escapeText(a.header) + '</b>' + escapeText(a.description) + '</div>';
+        '<div class="text"><b>' + escapeText(a.header) + '</b><span class="d">' + escapeText(a.description) + '</span>' +
+        (a.lines && a.lines.length > 1 ? '<div class="lines">Lines: ' + escapeText(a.lines.join(", ")) + '</div>' : '') + '</div>';
       box.appendChild(item);
     }
+    if (failed.length > 0) {
+      const bad = document.createElement("div");
+      bad.className = "ok";
+      bad.textContent = "Line status unavailable: " + failed.join(", ") + ".";
+      box.appendChild(bad);
+    }
+  }
+
+  // Alerts must fit above the rows, with at least MIN_ROWS rows left. Each step runs only if the
+  // one before was not enough: 1) descriptions to half size; 2) titles to half size; 3) descriptions
+  // hidden except the first alert's; 4) the first description hidden; 5) the last alerts hidden,
+  // with a note saying how many are not shown.
+  const MIN_SCALE_STEPS = 10;   // 1.0 down to 0.5 in steps of 0.05
+  function outerHeight(el) {
+    const cs = getComputedStyle(el);
+    return el.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }
+  // Room the status box may take: the screen less the header, footer and the minimum rows.
+  function alertBudget(slot) {
+    const screen = document.querySelector(".screen");
+    const cs = getComputedStyle(screen);
+    const content = screen.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const minBoard = MIN_ROWS * slot + (MIN_ROWS - 1) * slot * GAP_RATIO;
+    return content - outerHeight(document.querySelector("header")) - outerHeight(document.querySelector(".footer")) - minBoard;
+  }
+  function fitAlerts(budget) {
+    const box = document.getElementById("alerts");
+    const status = document.querySelector(".status");
+    const fits = () => outerHeight(status) <= budget;
+    if (fits()) return;
+    const scales = [];
+    for (let i = 1; i <= MIN_SCALE_STEPS; i++) scales.push(Math.round((1 - i * 0.05) * 100) / 100);
+
+    for (const s of scales) {                       // 1
+      box.style.setProperty("--desc-scale", s);
+      if (fits()) return;
+    }
+    for (const s of scales) {                       // 2
+      box.style.setProperty("--title-scale", s);
+      if (fits()) return;
+    }
+    const items = [...box.querySelectorAll(".item")];
+    items.slice(1).forEach(i => i.querySelector(".d").classList.add("off"));   // 3
+    if (fits()) return;
+    if (items.length) items[0].querySelector(".d").classList.add("off");       // 4
+    if (fits()) return;
+
+    const more = document.createElement("div");     // 5
+    more.className = "more";
+    more.textContent = "Additional alerts not displayed…";
+    more.hidden = true;
+    box.appendChild(more);
+    let shown = items.length;
+    while (!fits() && shown > 0) {
+      shown--;
+      items[shown].hidden = true;
+      more.hidden = false;
+    }
+  }
+
+  // Cut at the last whole word before max characters, and mark the cut with an ellipsis.
+  function cutText(s, max) {
+    if (s.length <= max) return s;
+    const cut = s.slice(0, max);
+    const at = cut.lastIndexOf(" ");
+    return (at > max * 0.5 ? cut.slice(0, at) : cut) + "…";
   }
 
   async function getJson(url) {
@@ -243,37 +351,56 @@
         .sort((a, b) => a.epoch - b.epoch)
         .slice(0, COUNT)
         .map(t => ({ ...t, mins: minutesUntil(t.epoch) }));
-      renderTrains(trains);
+      trainList = trains;
+      layout();
       document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString();
     } catch (err) {
-      document.getElementById("updated").textContent = "Train data unavailable (" + err.message + ")";
+      // Clear the rows: a stale countdown would show minutes that are no longer true.
+      console.error(err);
+      if (document.getElementById("station").textContent === "Loading…") {
+        document.getElementById("station").textContent = STOP_ID;
+      }
+      trainList = "error";
+      layout();
+      document.getElementById("updated").textContent = "Train data unavailable";
     }
   }
 
   async function refreshAlerts() {
     try {
-      // Fetch alerts for every line; a failed line is skipped rather than hiding the others.
-      // The route lists only alert IDs; the header and description come from each alert.
+      // Fetch alerts for every line; a failed line is reported as unavailable, not as normal,
+      // and does not hide the other lines. The route lists only alert IDs; the header and
+      // description come from each alert.
       const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
       const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
       const results = await Promise.all(ROUTES.map(r =>
         getJson(BASE + "/routes/" + encodeURIComponent(r))
           .then(route => Promise.all((route.alerts || []).slice(0, 3).map(a =>
             getJson(BASE + "/alerts/" + encodeURIComponent(a.id))
-              .then(d => ({ route: r, header: plainText(englishText(d.header)), description: plainText(englishText(d.description)).slice(0, 200) }))
-              .catch(() => null)
+              .then(d => ({ route: r, header: plainText(englishText(d.header)), description: cutText(plainText(englishText(d.description)), 200) }))
           )))
-          .then(list => list.filter(x => x))
-          .catch(() => [])
+          .then(list => ({ route: r, alerts: list }))
+          .catch(() => ({ route: r, failed: true }))
       ));
-      renderAlerts([].concat(...results));
+      // One alert can apply to several lines; show it once and list its lines.
+      const merged = new Map();
+      for (const a of [].concat(...results.filter(x => !x.failed).map(x => x.alerts))) {
+        const key = a.header + "|" + a.description;
+        if (merged.has(key)) {
+          const m = merged.get(key);
+          if (!m.lines.includes(a.route)) m.lines.push(a.route);
+        } else {
+          merged.set(key, { route: a.route, lines: [a.route], header: a.header, description: a.description });
+        }
+      }
+      alertList = [...merged.values()];
+      alertFailed = results.filter(x => x.failed).map(x => x.route);
+      layout();
     } catch (err) {
-      const box = document.getElementById("alerts");
-      box.textContent = "";
-      const e = document.createElement("div");
-      e.className = "ok";
-      e.textContent = "Line status unavailable.";
-      box.appendChild(e);
+      console.error(err);
+      alertList = [];
+      alertFailed = ROUTES.slice();
+      layout();
     }
   }
 
