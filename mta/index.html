@@ -208,8 +208,12 @@
     document.querySelector("#clock .s").textContent = ":" + pad(d.getSeconds());
   }
 
-  function minutesUntil(epochSeconds) {
-    return Math.round((epochSeconds - Date.now() / 1000) / 60);
+  // The countdown for one train, from its arrival time: whole minutes, dropping a minute at each
+  // minute edge, and "Now" under 30 seconds. Called every second, so it needs no API data.
+  function etaHtml(epochSeconds) {
+    const secs = epochSeconds - Date.now() / 1000;
+    if (secs < 30) return '<div class="mins">Now</div>';
+    return '<div class="mins">' + Math.floor(secs / 60) + '</div><div class="unit">MIN</div>';
   }
 
   function escapeText(s) {
@@ -245,6 +249,7 @@
   let trainList = null;      // null until the first train refresh; "error", or an array of trains
   let alertList = null;      // null until the first alert refresh; an array of alerts
   let alertFailed = [];      // lines whose status could not be fetched
+  let lastUpdated = "";      // time of the last successful train refresh
 
   function showBoardMessage(text) {
     const board = document.getElementById("board");
@@ -258,17 +263,15 @@
   function trainRow(t, height, gap) {
     const row = document.createElement("div");
     row.className = "train";
+    row.dataset.epoch = t.epoch;   // the arrival time; the countdown is worked out from it every second
     row.style.height = height + "px";
     row.style.marginTop = gap + "px";
-    const minsHtml = t.mins < 1
-      ? '<div class="mins">Now</div>'
-      : '<div class="mins">' + t.mins + '</div><div class="unit">MIN</div>';
     row.innerHTML =
       '<div class="card">' +
         bulletHtml(t.route) +
         '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
         '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
-        '<div class="eta">' + minsHtml + '</div>' +
+        '<div class="eta">' + etaHtml(t.epoch) + '</div>' +
       '</div>';
     return row;
   }
@@ -300,6 +303,26 @@
     fitAll();
   }
   window.addEventListener("resize", layout);
+
+  // Runs every second: updates each countdown, and drops a train once its arrival time has passed.
+  // A drop re-lays out the board so the next train in the list takes its place.
+  function tickEtas() {
+    if (!Array.isArray(trainList)) return;
+    const now = Date.now() / 1000;
+    const live = trainList.filter(t => t.epoch >= now);
+    if (live.length !== trainList.length) {
+      trainList = live;
+      layout();
+      return;
+    }
+    document.querySelectorAll("#board .train").forEach(row => {
+      const html = etaHtml(Number(row.dataset.epoch));
+      if (row.dataset.eta !== html) {        // write to the DOM only when the countdown has changed
+        row.dataset.eta = html;
+        row.querySelector(".eta").innerHTML = html;
+      }
+    });
+  }
 
   // failed lists the lines whose status could not be fetched; those are never reported as normal.
   function renderAlerts(alerts, failed) {
@@ -423,24 +446,29 @@
           direction: s.headsign || LABEL,
           destination: (s.destination && s.destination.name) || ""
         }))
-        .filter(t => t.epoch && t.epoch >= now - 30)
+        .filter(t => t.epoch && t.epoch >= now)
         .filter(t => ROUTES.includes(t.route.toUpperCase()))
         .sort((a, b) => a.epoch - b.epoch)
-        .slice(0, COUNT)
-        .map(t => ({ ...t, mins: minutesUntil(t.epoch) }));
+        .slice(0, COUNT);
       await routesReady.catch(() => {});   // labels fall back to route IDs if this fails
       trainList = trains;
+      lastUpdated = new Date().toLocaleTimeString();
       layout();
-      document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString();
+      document.getElementById("updated").textContent = "Updated " + lastUpdated;
     } catch (err) {
-      // Clear the rows: a stale countdown would show minutes that are no longer true.
       console.error(err);
       if (document.getElementById("station").textContent === "Loading…") {
         document.getElementById("station").textContent = STOP_ID;
       }
-      trainList = "error";
-      layout();
-      document.getElementById("updated").textContent = "Train data unavailable";
+      // Keep the last trains we were given: their countdowns still run from the arrival times, which
+      // is more useful than an empty board. Only with no data at all is the board cleared.
+      if (!Array.isArray(trainList)) {
+        trainList = "error";
+        layout();
+      }
+      document.getElementById("updated").textContent = lastUpdated
+        ? "Train data unavailable; last update " + lastUpdated
+        : "Train data unavailable";
     }
   }
 
@@ -448,7 +476,9 @@
   // older than ALERT_TTL_MS. The route list says which alerts are current, so only a new alert
   // costs a request, and an alert that has left the list is dropped from the cache.
   const alertCache = new Map();   // alert id -> { header, description, endsAt, at }
-  const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
+  // The English text of an alert field, or "". Only English entries count: the feed also carries
+  // HTML copies ("en-html") and machine metadata (a JSON blob) that must never be shown.
+  const englishText = arr => ((arr || []).find(x => x.language === "en" || /^en-[A-Za-z]{2}$/.test(x.language || "")) || {}).text || "";
   const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
   function loadAlert(id) {
     const hit = alertCache.get(id);
@@ -527,7 +557,7 @@
   }
 
   tickClock();
-  setInterval(tickClock, 1000);
+  setInterval(() => { tickClock(); tickEtas(); }, 1000);
   refreshAll();
   setInterval(refreshAll, REFRESH_MS);
 </script>
