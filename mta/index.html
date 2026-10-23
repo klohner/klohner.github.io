@@ -41,6 +41,7 @@
   .dest .sub { font-size: calc(var(--u) * 0.23); color: var(--ink); margin-top: calc(var(--u) * 0.02); line-height: 1.15; white-space: nowrap; }
   .eta { flex: 0 0 auto; text-align: right; margin-left: calc(var(--u) * 0.25); }
   .eta .mins { font-size: calc(var(--u) * 0.46); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .eta .mins.delay { font-size: calc(var(--u) * 0.3); }
   .eta .unit { font-size: calc(var(--u) * 0.14); font-weight: 700; color: var(--num); letter-spacing: .08em; }
   .empty { padding: 2vh; color: var(--muted); font-size: 2.6vh; }
 
@@ -97,6 +98,7 @@
   const MAX_COUNT = 10;                   // the largest count a URL may ask for
   const DEFAULT_LABEL = "";               // direction name under the station; "" = the platform's headsign from the API
   const DEFAULT_LINE_COLOR = "#808183";   // grey: for a line the feed has not described (line colours come from the feed)
+  const DELAY_ALERT_HEADER = /train\s+delayed/i;  // the header of a trip alert that means the train shows as delayed
   const REFRESH_MS = 30000;               // how often trains and alerts are refreshed
   const ALERT_TTL_MS = 10 * 60 * 1000;    // how long an alert's details are kept before they are fetched again
   const ALERT_DESCRIPTION_CHARS = 200;    // alert descriptions are cut to about this length
@@ -215,6 +217,8 @@
     if (secs < 30) return '<div class="mins">Now</div>';
     return '<div class="mins">' + Math.floor(secs / 60) + '</div><div class="unit">MIN</div>';
   }
+  // A train with a "Train delayed" trip alert shows this in place of its countdown, as on the station clocks.
+  const DELAY_HTML = '<div class="mins delay">Delay</div>';
 
   function escapeText(s) {
     const div = document.createElement("div");
@@ -264,6 +268,7 @@
     const row = document.createElement("div");
     row.className = "train";
     row.dataset.epoch = t.epoch;   // the arrival time; the countdown is worked out from it every second
+    row.dataset.delayed = t.delayed ? "1" : "0";
     row.style.height = height + "px";
     row.style.marginTop = gap + "px";
     row.innerHTML =
@@ -271,7 +276,7 @@
         bulletHtml(t.route) +
         '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
         '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
-        '<div class="eta">' + etaHtml(t.epoch) + '</div>' +
+        '<div class="eta">' + (t.delayed ? DELAY_HTML : etaHtml(t.epoch)) + '</div>' +
       '</div>';
     return row;
   }
@@ -316,7 +321,7 @@
       return;
     }
     document.querySelectorAll("#board .train").forEach(row => {
-      const html = etaHtml(Number(row.dataset.epoch));
+      const html = row.dataset.delayed === "1" ? DELAY_HTML : etaHtml(Number(row.dataset.epoch));
       if (row.dataset.eta !== html) {        // write to the DOM only when the countdown has changed
         row.dataset.eta = html;
         row.querySelector(".eta").innerHTML = html;
@@ -427,6 +432,22 @@
     return res.json();
   }
 
+  // Each train on the board is checked for a "Train delayed" trip alert. The trip's own endpoint lists
+  // its alerts; a trip's alerts can change during its run, so this is repeated on every refresh (at
+  // most MAX_COUNT small requests). A failed check counts as not delayed.
+  async function checkTrips(trains) {
+    await Promise.all(trains.map(async t => {
+      try {
+        const trip = await getJson(BASE + "/routes/" + encodeURIComponent(t.route) + "/trips/" + encodeURIComponent(t.trip));
+        const headers = await Promise.all((trip.alerts || []).map(a => loadAlert(a.id).then(e => e.header, () => "")));
+        t.delayed = headers.some(h => DELAY_ALERT_HEADER.test(h));
+      } catch (err) {
+        console.error(err);
+        t.delayed = false;
+      }
+    }));
+  }
+
   async function refreshTrains(routesReady) {
     try {
       const data = await getJson(STOP_URL);
@@ -443,6 +464,7 @@
         .map(s => ({
           epoch: Number((s.arrival && s.arrival.time) || (s.departure && s.departure.time)),
           route: s.trip.route.id,
+          trip: s.trip.id,
           direction: s.headsign || LABEL,
           destination: (s.destination && s.destination.name) || ""
         }))
@@ -451,6 +473,7 @@
         .sort((a, b) => a.epoch - b.epoch)
         .slice(0, COUNT);
       await routesReady.catch(() => {});   // labels fall back to route IDs if this fails
+      await checkTrips(trains);
       trainList = trains;
       lastUpdated = new Date().toLocaleTimeString();
       layout();
