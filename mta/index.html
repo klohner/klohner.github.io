@@ -88,48 +88,51 @@
 </div>
 
 <script>
-  // Settings come from the URL. Examples:
+  // ---- Defaults and settings. Edit these to change what the page shows when the URL doesn't say. ----
+  // The URL can override any of the first six: index.html?stop=116&direction=S&route=1,2&count=5&label=Downtown
+  const DEFAULT_STOP = "128";             // station ID; 128 is 34 St-Penn Station
+  const DEFAULT_DIRECTION = "N";          // N or S; used only when the stop ID has no suffix
+  const DEFAULT_ROUTES = ["1"];           // line(s); several are merged into one list
+  const DEFAULT_COUNT = 7;                // trains to show
+  const MAX_COUNT = 10;                   // the largest count a URL may ask for
+  const DEFAULT_LABEL = "";               // direction name under the station; "" = the platform's headsign from the API
+  const DEFAULT_LINE_COLOR = "#808183";   // grey: for a line the feed has not described (line colours come from the feed)
+  const REFRESH_MS = 30000;               // how often trains and alerts are refreshed
+  const ALERT_TTL_MS = 10 * 60 * 1000;    // how long an alert's details are kept before they are fetched again
+  const ALERT_DESCRIPTION_CHARS = 200;    // alert descriptions are cut to about this length
+  // Layout: the row ceiling is the height REF_ROWS rows take with a one-line status; alerts never
+  // push trains below MIN_ROWS rows; rows are separated by GAP_RATIO of a row.
+  const REF_ROWS = 7, MIN_ROWS = 2, GAP_RATIO = 0.1;
+  const MIN_SCALE_STEPS = 10;             // alert text shrinks from full size to half size in this many steps
+
+  // Settings come from the URL; the defaults above are used when a parameter is absent. Examples:
   //   index.html                                    Penn Station (34 St), uptown 1 train (defaults)
   //   index.html?stop=116&direction=S               125 St, downtown
   //   index.html?stop=116S                          a directional stop ID also works
   //   index.html?stop=631&direction=N&route=6&count=4&label=Uptown
-  // stop       stop ID, with or without an N/S suffix (default 128, Penn Station)
-  // direction  N or S, used when the stop has no suffix (default N)
-  // route      line(s) to show, e.g. route=1 or route=1,2,3 or route=1&route=2 (default 1)
+  // stop       stop ID, with or without an N/S suffix
+  // direction  N or S, used when the stop has no suffix
+  // route      line(s) to show, e.g. route=1 or route=1,2,3 or route=1&route=2
   //            trains from all listed lines are merged and sorted by time
-  // count      how many trains to show, 1 to 10 (default 7)
-  // label      direction name under the station name (default from direction)
+  // count      how many trains to show, 1 to MAX_COUNT
+  // label      direction name under the station name; default is the platform's headsign from the API
   // Data comes from the public Transiter API that realtimerail.nyc uses; it allows any origin.
   const params = new URLSearchParams(window.location.search);
-  const DIRECTION = (params.get("direction") || "N").toUpperCase() === "S" ? "S" : "N";
-  const RAW_STOP = (params.get("stop") || "128").toUpperCase();
+  const DIRECTION = (params.get("direction") || DEFAULT_DIRECTION).toUpperCase() === "S" ? "S" : "N";
+  const RAW_STOP = (params.get("stop") || DEFAULT_STOP).toUpperCase();
   const STOP_ID = /[NS]$/.test(RAW_STOP) ? RAW_STOP : RAW_STOP + DIRECTION;
   // route can repeat (route=1&route=2) or list commas (route=1,2,3); trains from all of them are merged.
   const ROUTES = params.getAll("route").join(",").split(",")
     .map(r => r.trim().toUpperCase()).filter(r => r);
-  if (ROUTES.length === 0) ROUTES.push("1");
-  const COUNT = Math.min(10, Math.max(1, parseInt(params.get("count"), 10) || 7));
-  const LABEL = params.get("label") || (DIRECTION === "N" ? "Uptown" : "Downtown");
+  if (ROUTES.length === 0) ROUTES.push(...DEFAULT_ROUTES);
+  const COUNT = Math.min(MAX_COUNT, Math.max(1, parseInt(params.get("count"), 10) || DEFAULT_COUNT));
+  // An explicit label wins. Otherwise the label is the platform's headsign from the API, set when the stop loads.
+  const LABEL_OVERRIDE = params.get("label");
+  let LABEL = LABEL_OVERRIDE || DEFAULT_LABEL;
 
   const BASE = "https://realtimerail.nyc/transiter/v0.6/systems/us-ny-subway";
   // The page uses only stop times and the name; the other parts of the stop response are skipped.
   const STOP_URL = BASE + "/stops/" + encodeURIComponent(STOP_ID) + "?skip_service_maps=true&skip_alerts=true&skip_transfers=true";
-  const REFRESH_MS = 30000;
-
-  // Bullet colours by line (MTA colours). Unknown lines fall back to grey.
-  const LINE_COLORS = {
-    "1": "#d9222a", "2": "#d9222a", "3": "#d9222a",
-    "4": "#00933c", "5": "#00933c", "6": "#00933c",
-    "7": "#b933ad",
-    "A": "#2850ad", "C": "#2850ad", "E": "#2850ad",
-    "B": "#ff6319", "D": "#ff6319", "F": "#ff6319", "M": "#ff6319",
-    "G": "#6cbe45",
-    "J": "#996633", "Z": "#996633",
-    "L": "#a7a9ac",
-    "N": "#fccc0a", "Q": "#fccc0a", "R": "#fccc0a", "W": "#fccc0a",
-    "S": "#808183", "SI": "#2850ad"
-  };
-  function lineColor(id) { return LINE_COLORS[String(id).toUpperCase()] || "#808183"; }
 
   // Route labels and colours come from the feed: shortName is the letter on the circle (the
   // shuttles are "S"), and color and textColor are the circle colours. One request (/routes, with
@@ -151,7 +154,7 @@
   // A circle for a line: its colour and label from the feed.
   function bulletHtml(r) {
     const info = routeInfo[r] || {};
-    const bg = info.color || lineColor(r);
+    const bg = info.color || DEFAULT_LINE_COLOR;
     const fg = info.textColor || "#fff";
     return '<span class="bullet" style="background:' + bg + ';color:' + fg + '">' + escapeText(routeLabel(r)) + '</span>';
   }
@@ -167,7 +170,7 @@
   function markerHtml(token) {
     const base = token.replace(/X$/i, "");
     const info = routeInfo[base] || {};
-    const bg = info.color || lineColor(base);
+    const bg = info.color || DEFAULT_LINE_COLOR;
     const fg = info.textColor || "#fff";
     return '<span class="marker" style="background:' + bg + ';color:' + fg + '">' + escapeText(token) + '</span>';
   }
@@ -239,7 +242,6 @@
   // Layout. Seven rows at the normal one-line status set the row height, and no row grows past it.
   // Alerts come first: the status box takes the height its alerts need, and rows give up space to
   // it, down to MIN_ROWS rows. Only when no alerts need the room do rows shrink to show a larger count.
-  const REF_ROWS = 7, MIN_ROWS = 2, GAP_RATIO = 0.1;
   let trainList = null;      // null until the first train refresh; "error", or an array of trains
   let alertList = null;      // null until the first alert refresh; an array of alerts
   let alertFailed = [];      // lines whose status could not be fetched
@@ -341,7 +343,6 @@
   // one before was not enough: 1) descriptions to half size; 2) titles to half size; 3) descriptions
   // hidden except the first alert's; 4) the first description hidden; 5) the last alerts hidden,
   // with a note saying how many are not shown.
-  const MIN_SCALE_STEPS = 10;   // 1.0 down to 0.5 in steps of 0.05
   function outerHeight(el) {
     const cs = getComputedStyle(el);
     return el.offsetHeight + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
@@ -407,6 +408,12 @@
     try {
       const data = await getJson(STOP_URL);
       document.getElementById("station").textContent = data.name || STOP_ID;
+      // Unless the URL gave a label, use the platform's headsign from the API (the rule for this stop).
+      if (!LABEL_OVERRIDE) {
+        const rules = data.headsignRules || [];
+        const rule = rules.find(h => h.stop && h.stop.id === STOP_ID) || rules[0];
+        LABEL = rule && rule.headsign ? rule.headsign : DEFAULT_LABEL;
+      }
       document.getElementById("subtitle").textContent = LABEL;
       const now = Date.now() / 1000;
       const trains = (data.stopTimes || [])
@@ -440,7 +447,6 @@
   // Alert details are cached by alert ID: an alert is fetched once and reused until its entry is
   // older than ALERT_TTL_MS. The route list says which alerts are current, so only a new alert
   // costs a request, and an alert that has left the list is dropped from the cache.
-  const ALERT_TTL_MS = 10 * 60 * 1000;
   const alertCache = new Map();   // alert id -> { header, description, endsAt, at }
   const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
   const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -450,7 +456,7 @@
     return getJson(BASE + "/alerts/" + encodeURIComponent(id)).then(d => {
       const entry = {
         header: plainText(englishText(d.header)),
-        description: cutText(plainText(englishText(d.description)), 200),
+        description: cutText(plainText(englishText(d.description)), ALERT_DESCRIPTION_CHARS),
         // Every period the alert is active in; the time is decided at render, when "now" is known.
         periods: (d.allActivePeriods || []).map(p => ({
           startsAt: Number(p.startsAt || 0),
