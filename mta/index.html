@@ -53,9 +53,12 @@
   .status .item .text b { display: block; font-size: calc(2.6vh * var(--title-scale, 1)); }
   .status .item .text .d { font-size: calc(2.3vh * var(--desc-scale, 1)); }
   .status .item .text .d.off { display: none; }
-  .status .item .text .lines { font-size: 2vh; color: var(--muted); }
+  .status .item .text .lines, .status .item .text .until { font-size: 2vh; color: var(--muted); }
+  .status .marker { display: inline-block; box-sizing: border-box; min-width: 1.5em; height: 1.5em; line-height: 1.5em; padding: 0 0.2em; border-radius: 0.75em; text-align: center; font-weight: 700; font-size: 0.85em; vertical-align: 0.05em; }
   .status .more { font-size: 2vh; color: var(--muted); margin-top: 0.6vh; }
   .status .ok { font-size: 2.4vh; color: var(--muted); }
+  .status .ok .bullet { display: inline-flex; vertical-align: middle; width: 2.8vh; height: 2.8vh; font-size: 1.6vh; margin-right: 1.1vw; }
+  .status .lines .bullet { display: inline-flex; vertical-align: middle; width: 2.4vh; height: 2.4vh; font-size: 1.4vh; margin: 0 0.8vw 0 0; }
   .footer { flex: 0 0 auto; display: flex; justify-content: space-between; font-size: 1.8vh; color: var(--muted); margin-top: 0.8vh; }
 </style>
 </head>
@@ -109,7 +112,8 @@
   const LABEL = params.get("label") || (DIRECTION === "N" ? "Uptown" : "Downtown");
 
   const BASE = "https://realtimerail.nyc/transiter/v0.6/systems/us-ny-subway";
-  const STOP_URL = BASE + "/stops/" + encodeURIComponent(STOP_ID);
+  // The page uses only stop times and the name; the other parts of the stop response are skipped.
+  const STOP_URL = BASE + "/stops/" + encodeURIComponent(STOP_ID) + "?skip_service_maps=true&skip_alerts=true&skip_transfers=true";
   const REFRESH_MS = 30000;
 
   // Bullet colours by line (MTA colours). Unknown lines fall back to grey.
@@ -126,6 +130,71 @@
     "S": "#808183", "SI": "#2850ad"
   };
   function lineColor(id) { return LINE_COLORS[String(id).toUpperCase()] || "#808183"; }
+
+  // Route labels and colours come from the feed: shortName is the letter on the circle (the
+  // shuttles are "S"), and color and textColor are the circle colours. One request (/routes, with
+  // service maps skipped) returns every route's details and its current alert IDs, so no per-route
+  // requests are needed. The table above is a fallback for routes the feed has not answered for.
+  const ROUTES_URL = BASE + "/routes?skip_service_maps=true";
+  const routeInfo = {};      // route id -> { label, color, textColor }
+  const hex = c => /^[0-9A-F]{6}$/i.test(c || "") ? "#" + c : null;
+  function fetchRouteList() {
+    return getJson(ROUTES_URL).then(data => {
+      const routes = data.routes || [];
+      for (const r of routes) {
+        routeInfo[r.id] = { label: r.shortName || r.id, color: hex(r.color), textColor: hex(r.textColor) };
+      }
+      return routes;
+    });
+  }
+  function routeLabel(r) { return routeInfo[r] ? routeInfo[r].label : r; }
+  // A circle for a line: its colour and label from the feed.
+  function bulletHtml(r) {
+    const info = routeInfo[r] || {};
+    const bg = info.color || lineColor(r);
+    const fg = info.textColor || "#fff";
+    return '<span class="bullet" style="background:' + bg + ';color:' + fg + '">' + escapeText(routeLabel(r)) + '</span>';
+  }
+  // Circles for a list of routes, one per distinct label (the three shuttles share one "S").
+  // Every place the page names a line uses these, not text.
+  function circlesHtml(ids) {
+    const shown = new Map();
+    for (const r of ids) if (!shown.has(routeLabel(r))) shown.set(routeLabel(r), r);
+    return '<span class="circles">' + [...shown.values()].map(bulletHtml).join("") + '</span>';
+  }
+  // "[2][5]" in alert text is drawn as the route circles, as realtimerail.nyc does. Tokens with an
+  // express suffix ("6X") keep their text and take the colour of the base route.
+  function markerHtml(token) {
+    const base = token.replace(/X$/i, "");
+    const info = routeInfo[base] || {};
+    const bg = info.color || lineColor(base);
+    const fg = info.textColor || "#fff";
+    return '<span class="marker" style="background:' + bg + ';color:' + fg + '">' + escapeText(token) + '</span>';
+  }
+  function richText(s) {
+    const re = /\[([0-9A-Za-z]{1,3})\]/g;
+    let out = "", last = 0, m;
+    while ((m = re.exec(s)) !== null) {
+      out += escapeText(s.slice(last, m.index)) + markerHtml(m[1]);
+      last = m.index + m[0].length;
+    }
+    return out + escapeText(s.slice(last));
+  }
+  // A time in words: the weekday is added when it is not today.
+  function whenText(sec) {
+    const d = new Date(sec * 1000);
+    const day = d.toDateString() === new Date().toDateString() ? "" : d.toLocaleDateString([], { weekday: "short" }) + " ";
+    return day + d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  // "Until <end>" while an active period has an end time; otherwise "From <start>" for the next
+  // period that has not started yet. Empty when neither applies (open-ended, or nothing scheduled).
+  function periodText(periods) {
+    const now = Date.now() / 1000;
+    const active = periods.find(p => p.startsAt <= now && (p.endsAt === null || p.endsAt > now));
+    if (active) return active.endsAt ? "Until " + whenText(active.endsAt) : "";
+    const next = periods.filter(p => p.startsAt > now).sort((a, b) => a.startsAt - b.startsAt)[0];
+    return next ? "From " + whenText(next.startsAt) : "";
+  }
 
   function pad(n) { return String(n).padStart(2, "0"); }
 
@@ -194,7 +263,7 @@
       : '<div class="mins">' + t.mins + '</div><div class="unit">MIN</div>';
     row.innerHTML =
       '<div class="card">' +
-        '<span class="bullet" style="background:' + lineColor(t.route) + '">' + escapeText(t.route) + '</span>' +
+        bulletHtml(t.route) +
         '<div class="dest"><div class="name">' + escapeText(t.direction) + '</div>' +
         '<div class="sub">' + escapeText(t.destination) + '</div></div>' +
         '<div class="eta">' + minsHtml + '</div>' +
@@ -246,7 +315,7 @@
     if (alerts.length === 0 && failed.length === 0) {
       const ok = document.createElement("div");
       ok.className = "ok";
-      ok.textContent = ROUTES.join(", ") + (ROUTES.length > 1 ? " lines: service running normally." : " line: service running normally.");
+      ok.innerHTML = circlesHtml(ROUTES) + " service running normally.";
       box.appendChild(ok);
       return;
     }
@@ -254,15 +323,16 @@
       const item = document.createElement("div");
       item.className = "item";
       item.innerHTML =
-        '<span class="bullet" style="background:' + lineColor(a.route) + '">' + escapeText(a.route) + '</span>' +
-        '<div class="text"><b>' + escapeText(a.header) + '</b><span class="d">' + escapeText(a.description) + '</span>' +
-        (a.lines && a.lines.length > 1 ? '<div class="lines">Lines: ' + escapeText(a.lines.join(", ")) + '</div>' : '') + '</div>';
+        bulletHtml(a.route) +
+        '<div class="text"><b>' + richText(a.header) + '</b><span class="d">' + richText(a.description) + '</span>' +
+        (a.lines && a.lines.length > 1 ? '<div class="lines">Lines: ' + circlesHtml(a.lines) + '</div>' : '') +
+        (periodText(a.periods || []) ? '<div class="until">' + escapeText(periodText(a.periods || [])) + '</div>' : '') + '</div>';
       box.appendChild(item);
     }
     if (failed.length > 0) {
       const bad = document.createElement("div");
       bad.className = "ok";
-      bad.textContent = "Line status unavailable: " + failed.join(", ") + ".";
+      bad.innerHTML = "Line status unavailable: " + circlesHtml(failed);
       box.appendChild(bad);
     }
   }
@@ -333,7 +403,7 @@
     return res.json();
   }
 
-  async function refreshTrains() {
+  async function refreshTrains(routesReady) {
     try {
       const data = await getJson(STOP_URL);
       document.getElementById("station").textContent = data.name || STOP_ID;
@@ -351,6 +421,7 @@
         .sort((a, b) => a.epoch - b.epoch)
         .slice(0, COUNT)
         .map(t => ({ ...t, mins: minutesUntil(t.epoch) }));
+      await routesReady.catch(() => {});   // labels fall back to route IDs if this fails
       trainList = trains;
       layout();
       document.getElementById("updated").textContent = "Updated " + new Date().toLocaleTimeString();
@@ -366,47 +437,87 @@
     }
   }
 
-  async function refreshAlerts() {
+  // Alert details are cached by alert ID: an alert is fetched once and reused until its entry is
+  // older than ALERT_TTL_MS. The route list says which alerts are current, so only a new alert
+  // costs a request, and an alert that has left the list is dropped from the cache.
+  const ALERT_TTL_MS = 10 * 60 * 1000;
+  const alertCache = new Map();   // alert id -> { header, description, endsAt, at }
+  const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
+  const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  function loadAlert(id) {
+    const hit = alertCache.get(id);
+    if (hit && Date.now() - hit.at < ALERT_TTL_MS) return Promise.resolve(hit);
+    return getJson(BASE + "/alerts/" + encodeURIComponent(id)).then(d => {
+      const entry = {
+        header: plainText(englishText(d.header)),
+        description: cutText(plainText(englishText(d.description)), 200),
+        // Every period the alert is active in; the time is decided at render, when "now" is known.
+        periods: (d.allActivePeriods || []).map(p => ({
+          startsAt: Number(p.startsAt || 0),
+          endsAt: p.endsAt ? Number(p.endsAt) : null
+        })),
+        at: Date.now()
+      };
+      alertCache.set(id, entry);
+      return entry;
+    });
+  }
+
+  async function refreshAlerts(routesReady) {
+    let routes;
     try {
-      // Fetch alerts for every line; a failed line is reported as unavailable, not as normal,
-      // and does not hide the other lines. The route lists only alert IDs; the header and
-      // description come from each alert.
-      const englishText = arr => ((arr || []).find(x => x.language === "en") || (arr || [])[0] || {}).text || "";
-      const plainText = s => String(s).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-      const results = await Promise.all(ROUTES.map(r =>
-        getJson(BASE + "/routes/" + encodeURIComponent(r))
-          .then(route => Promise.all((route.alerts || []).slice(0, 3).map(a =>
-            getJson(BASE + "/alerts/" + encodeURIComponent(a.id))
-              .then(d => ({ route: r, header: plainText(englishText(d.header)), description: cutText(plainText(englishText(d.description)), 200) }))
-          )))
-          .then(list => ({ route: r, alerts: list }))
-          .catch(() => ({ route: r, failed: true }))
-      ));
-      // One alert can apply to several lines; show it once and list its lines.
-      const merged = new Map();
-      for (const a of [].concat(...results.filter(x => !x.failed).map(x => x.alerts))) {
-        const key = a.header + "|" + a.description;
-        if (merged.has(key)) {
-          const m = merged.get(key);
-          if (!m.lines.includes(a.route)) m.lines.push(a.route);
-        } else {
-          merged.set(key, { route: a.route, lines: [a.route], header: a.header, description: a.description });
-        }
-      }
-      alertList = [...merged.values()];
-      alertFailed = results.filter(x => x.failed).map(x => x.route);
-      layout();
+      routes = await routesReady;
     } catch (err) {
       console.error(err);
       alertList = [];
       alertFailed = ROUTES.slice();
-      layout();
+      return layout();
     }
+    // The alert IDs that apply to each line we show. A line the feed does not list is unavailable,
+    // never normal.
+    const failed = new Set(ROUTES.filter(r => !routes.some(x => x.id === r)));
+    const lines = new Map();
+    for (const r of routes) {
+      if (!ROUTES.includes(r.id)) continue;
+      for (const a of r.alerts || []) {
+        if (!lines.has(a.id)) lines.set(a.id, []);
+        if (!lines.get(a.id).includes(r.id)) lines.get(a.id).push(r.id);
+      }
+    }
+    for (const id of [...alertCache.keys()]) {
+      if (!lines.has(id)) alertCache.delete(id);
+    }
+    // A failed alert is reported as unavailable on each of its lines, never as normal.
+    const results = await Promise.all([...lines.keys()].map(id =>
+      loadAlert(id).then(entry => ({ id, entry }), () => ({ id, failed: true }))
+    ));
+    // One alert can apply to several lines; show it once and list its lines.
+    const merged = new Map();
+    for (const res of results) {
+      if (res.failed) {
+        lines.get(res.id).forEach(l => failed.add(l));
+        continue;
+      }
+      const e = res.entry;
+      const key = e.header + "|" + e.description;
+      if (merged.has(key)) {
+        const m = merged.get(key);
+        for (const l of lines.get(res.id)) if (!m.lines.includes(l)) m.lines.push(l);
+      } else {
+        merged.set(key, { route: lines.get(res.id)[0], lines: [...lines.get(res.id)], header: e.header, description: e.description, periods: e.periods });
+      }
+    }
+    alertList = [...merged.values()];
+    alertFailed = [...failed];
+    layout();
   }
 
+  // One route list per cycle, shared by the train and alert refreshes.
   function refreshAll() {
-    refreshTrains();
-    refreshAlerts();
+    const routesReady = fetchRouteList();
+    routesReady.catch(() => {});
+    refreshTrains(routesReady);
+    refreshAlerts(routesReady);
   }
 
   tickClock();
